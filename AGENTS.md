@@ -45,15 +45,16 @@ The active implementation is TypeScript under `src/`. A local, Git-ignored snaps
 - `src/infrastructure/database/db.ts` — PostgreSQL schema creation, connection pool, and repeatable CSV upserts.
 - `src/infrastructure/llm/groq-client.ts` — strict structured extraction and reply drafting. It receives conversation context only, not payout records or payment tools. Deterministic filters check account identity, trip ID/date syntax, and unsafe replies.
 - `src/application/messages.ts` — idempotent inbound-message processing, conversation-state persistence, trace creation, and retry behavior.
+- `src/application/claims.ts` — rider/trip/payout lookups, seven-day IST eligibility, deterministic trip/day assessment, and outcome replies. It does not call PaySwift.
 - `src/application/traces.ts`, `src/application/ops.ts` — ordered trace and pending-operations queries.
 - `src/app.ts`, `src/main.ts`, `src/api/openapi.ts` — Express routes, Swagger documentation, startup, reference import, and readiness.
 - `Dockerfile`, `docker-compose.yml`, `package.json`, `tsconfig.json`, `.env.example` — TypeScript container and local configuration. Keep the assignment-provided `payswift` service unchanged. Never commit `.env` or a real Groq key.
 
-The user previously confirmed that `/health` worked and the earlier Python acknowledgement-only `/messages` returned HTTP 200. That was before the TypeScript migration. The current Node app has been rebuilt and exercised: `/messages` successfully reached Groq and returned a follow-up asking for the missing trip ID and date. The timeout issue was caused by passing `GROQ_TIMEOUT_SECONDS` directly to an SDK option that expects milliseconds; the client now converts seconds to milliseconds. The reply wording included both Hinglish and English versions of the same question, which can be refined after user review.
+The user previously confirmed that `/health` worked and the earlier Python acknowledgement-only `/messages` returned HTTP 200. That was before the TypeScript migration. The current Node app has been rebuilt and exercised: `/messages` successfully reached Groq and returned a follow-up asking for the missing trip ID and date. The timeout issue was caused by passing `GROQ_TIMEOUT_SECONDS` directly to an SDK option that expects milliseconds; the client now converts seconds to milliseconds. The new database claim-investigation slice compiles, but has not yet been exercised at runtime. The earlier reply repeated its question in Hinglish and English; wording cleanup remains.
 
 ### Remaining work
 
-- Connect issue details to rider, trip, and payout lookups; apply policy and explain both shortfalls and non-shortfalls.
+- Run the new rider/trip/payout investigation against representative trip-level, day-level, missing-data, and out-of-window messages; refine replies and multi-message context.
 - Enforce payment limits and create approval/escalation records.
 - Integrate PaySwift ledger reconciliation and idempotent payments.
 - Build the operations review page and approve/reject actions.

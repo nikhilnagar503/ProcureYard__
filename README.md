@@ -19,10 +19,10 @@ Open Swagger at http://localhost:8000/docs. The app and PaySwift health routes a
 
 ## Current agent design
 
-`POST /messages` validates vendor messages, deduplicates retries by `message_id`, sends the message plus recent context to Groq, stores structured issue details in PostgreSQL, and returns a short reply. The model extracts issue type, trip IDs, dates, and missing details. It does not receive payout records or payment tools. Deterministic application code validates the model's proposed IDs and dates and blocks cross-rider requests and payment promises.
+`POST /messages` validates vendor messages, deduplicates retries by `message_id`, sends rider wording and safe issue context to Groq, and stores the extracted issue. Application code then looks up the rider, trips, and payout lines in PostgreSQL and deterministically assesses a trip or IST-day claim inside the seven-day window. Replies explain a verified shortfall, no shortfall, or why the available records are unclear. Groq does not receive payout evidence and does not calculate or authorize money. This slice does not call PaySwift or move funds.
 
-`GET /trace/{rider_id}` returns ordered message, Groq, context-update, reply, and error events. `GET /ops/pending` lists operations items. The payout rules are implemented as deterministic functions in `src/domain/payouts.ts`, but the message agent does not call them yet.
+`GET /trace/{rider_id}` returns ordered message, Groq, rider/trip/payout lookup, deterministic assessment, context-update, reply, and error events. `GET /ops/pending` lists operations items. The payout rules in `src/domain/payouts.ts` are used for this assessment; approval limits and payment handling remain future work.
 
 ## Remaining work
 
-Connect message understanding to trip and payout records, apply the seven-day IST policy, handle operations approvals, reconcile and pay through PaySwift, build the operations page, add the evaluation runner and CI, and record evaluation results before submission. The basic Groq message-understanding path has been manually verified; multi-turn context and end-to-end payout handling remain to be reviewed and built.
+Add runtime verification for deterministic trip/day claim assessments and multi-turn context, handle payment limits and operations approvals, reconcile and pay through PaySwift, build the operations page, add the evaluation runner and CI, and record evaluation results before submission. The basic Groq message-understanding path has been manually verified; this new database investigation slice has compiled but has not yet been exercised against the running app.

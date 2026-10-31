@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Pool, PoolClient } from "pg";
 import {
+  appendInvestigationContext,
+  InvestigationEvent,
+  InvestigationTarget,
+  investigateIssues,
+} from "./claims.js";
+import {
   GroqMessageUnderstander,
   IssueUpdate,
   LanguageUnderstandingUnavailable,
@@ -79,7 +85,7 @@ export async function receiveMessage(
       riderId: args.riderId,
       text: args.text,
       receivedAt: args.receivedAt,
-      existingIssues: state.issues,
+      existingIssues: modelIssueContext(state.issues),
       recentMessages,
     });
     const result = sanitizeUnderstanding(modelResult, {
@@ -87,9 +93,14 @@ export async function receiveMessage(
       riderId: args.riderId,
       receivedAt: args.receivedAt,
     });
-    const updatedState = applyUpdates(state, result, args.messageId, args.receivedAt);
-    await saveCompletedMessage(pool, args, result, state, updatedState);
-    return result.reply;
+    const applied = applyUpdates(state, result, args.messageId, args.receivedAt);
+    const investigation = await investigateIssues(pool, args.riderId, args.receivedAt, applied.targets);
+    const updatedState = appendInvestigationContext(applied.state, investigation.outcomes);
+    const reply = investigation.outcomes.length > 0
+      ? investigation.outcomes.map((item) => item.reply).join(" ")
+      : result.reply;
+    await saveCompletedMessage(pool, args, result, reply, state, updatedState, investigation.events);
+    return reply;
   } catch (error) {
     await markFailed(pool, args.messageId, args.riderId,
       error instanceof LanguageUnderstandingUnavailable ? "language_understanding_unavailable" : "message_processing_failed");
@@ -127,7 +138,8 @@ async function loadContext(pool: Pool, riderId: string, currentMessageId: string
     recentMessages: history.rows.reverse().map((row) => ({
       received_at: row.received_at.toISOString(),
       rider_message: row.text,
-      agent_reply: row.reply ?? "",
+      // Replies may contain deterministic payout amounts; keep them out of Groq context.
+      agent_reply: "",
     })),
   };
 }
@@ -136,25 +148,44 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function modelIssueContext(issues: Record<string, unknown>[]): Record<string, unknown>[] {
+  const allowed = [
+    "issue_id", "issue_type", "summary", "trip_ids", "dates",
+    "missing_information", "follow_up_question",
+  ];
+  return issues.map((issue) => Object.fromEntries(
+    allowed.filter((key) => key in issue).map((key) => [key, issue[key]]),
+  ));
+}
+
 function applyUpdates(
   state: ConversationState,
   result: MessageUnderstanding,
   messageId: string,
   receivedAt: Date,
-): ConversationState {
+): { state: ConversationState; targets: InvestigationTarget[] } {
   const issues = [...state.issues];
+  const targets: InvestigationTarget[] = [];
   if (!result.identity_mismatch) {
     for (const update of result.updates) {
       const issue = issueState(update, receivedAt);
       if (update.action === "create" && update.issue_id === null) {
-        issues.push({ issue_id: randomUUID(), ...issue });
+        const issueId = randomUUID();
+        issues.push({ issue_id: issueId, ...issue });
+        targets.push({ issueId, update });
       } else if (update.action === "update" && update.issue_id) {
         const index = issues.findIndex((existing) => existing.issue_id === update.issue_id);
-        if (index >= 0) issues[index] = { issue_id: update.issue_id, ...issue };
+        if (index >= 0) {
+          issues[index] = { issue_id: update.issue_id, ...issue };
+          targets.push({ issueId: update.issue_id, update });
+        }
       }
     }
   }
-  return { ...state, issues, last_message_id: messageId, updated_at: receivedAt.toISOString() };
+  return {
+    state: { ...state, issues, last_message_id: messageId, updated_at: receivedAt.toISOString() },
+    targets,
+  };
 }
 
 function issueState(update: IssueUpdate, receivedAt: Date): Record<string, unknown> {
@@ -173,8 +204,10 @@ async function saveCompletedMessage(
   pool: Pool,
   args: { messageId: string; riderId: string },
   result: MessageUnderstanding,
+  reply: string,
   previousState: ConversationState,
   updatedState: ConversationState,
+  investigationEvents: InvestigationEvent[],
 ): Promise<void> {
   const client = await pool.connect();
   try {
@@ -186,16 +219,19 @@ async function saveCompletedMessage(
     );
     await client.query(
       `UPDATE inbound_messages SET reply = $2, processing_status = 'processed' WHERE message_id = $1`,
-      [args.messageId, result.reply],
+      [args.messageId, reply],
     );
     await addTrace(client, args.riderId, "tool_call", "groq_message_understanding", {
       message_id: args.messageId,
       active_issue_ids: previousState.issues.map((issue) => issue.issue_id ?? null),
     }, result);
+    for (const event of investigationEvents) {
+      await addTrace(client, args.riderId, event.type, event.name, event.input, event.output);
+    }
     await addTrace(client, args.riderId, "decision", "conversation_context_updated", {
       message_id: args.messageId,
     }, updatedState);
-    await addTrace(client, args.riderId, "reply", "rider_follow_up", null, result.reply);
+    await addTrace(client, args.riderId, "reply", "rider_follow_up", null, reply);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
