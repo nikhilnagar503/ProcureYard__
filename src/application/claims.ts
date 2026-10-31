@@ -111,10 +111,19 @@ function resultReply(status: ClaimStatus, assessments: PayoutAssessment[], reaso
   const shortfall = totalExpected - totalPaid;
   const dates = [...new Set(assessments.map((item) => item.payoutDate))];
   const dateLabel = dates.length === 1 ? dates[0] : dates.join(", ");
+  const dayTripIds = assessments.flatMap((assessment) =>
+    assessment.tripId ? [assessment.tripId] : assessment.breakdown.flatMap((line) => line.match(/\bT\d{6}\b/g) ?? []));
+  const uniqueDayTripIds = [...new Set(dayTripIds)];
+  const tripContext = uniqueDayTripIds.length
+    ? ` (including trip${uniqueDayTripIds.length === 1 ? "" : "s"} ${uniqueDayTripIds.slice(0, 5).join(", ")}${uniqueDayTripIds.length > 5 ? ` and ${uniqueDayTripIds.length - 5} more` : ""})`
+    : "";
+  const checkedRecords = `the ${assessments.length === 1 && assessments[0]!.scope === "trip" ? `trip ${assessments[0]!.tripId}` : `payout records${tripContext}`} for ${dateLabel}`;
+  const incentiveNotes = assessments.flatMap((assessment) => assessment.breakdown.filter((line) => line.startsWith("Daily incentive:")));
+  const incentiveText = incentiveNotes.length ? ` ${incentiveNotes.join(" ")}` : "";
   if (status === "verified_shortfall") {
-    return `I checked the ${assessments.length === 1 && assessments[0]!.scope === "trip" ? `trip ${assessments[0]!.tripId}` : "payout records"} for ${dateLabel}. Policy amount: ₹${totalExpected}; recorded payout: ₹${totalPaid}; verified shortfall: ₹${shortfall}. No payment was made in this step.`;
+    return `I checked ${checkedRecords}. Policy amount: ₹${totalExpected}; recorded payout: ₹${totalPaid}; verified shortfall: ₹${shortfall}.${incentiveText} No payment was made in this step.`;
   }
-  return `I checked the ${assessments.length === 1 && assessments[0]!.scope === "trip" ? `trip ${assessments[0]!.tripId}` : "payout records"} for ${dateLabel}. Policy amount: ₹${totalExpected}; recorded payout: ₹${totalPaid}. The records show no additional amount is due.`;
+  return `I checked ${checkedRecords}. Policy amount: ₹${totalExpected}; recorded payout: ₹${totalPaid}.${incentiveText} The records show no additional amount is due.`;
 }
 
 function outcome(

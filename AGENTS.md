@@ -50,17 +50,17 @@ The active implementation is TypeScript under `src/`. A local, Git-ignored snaps
 - `src/application/traces.ts`, `src/application/ops.ts` — chronological trace, operations queue/conversation queries, and approve/reject actions.
 - `src/templates/ops.html` — local operations review page for rider conversations, traces, and pending items.
 - `src/app.ts`, `src/main.ts`, `src/api/openapi.ts` — Express routes, Swagger documentation, startup, reference import, and readiness.
+- `evals/run.py` — black-box conversation evaluator; assertions use the public app API and PaySwift ledger only. Supports all scenarios or one isolated case via `--case`.
+- `.github/workflows/ci.yml` — build on every push/PR and a clean Compose stack per conversation when the Groq secret is configured.
+- `eval-results.json` — latest local run report, with isolation caveat.
 - `Dockerfile`, `docker-compose.yml`, `package.json`, `tsconfig.json`, `.env.example` — TypeScript container and local configuration. Keep the assignment-provided `payswift` service unchanged. Never commit `.env` or a real Groq key.
 
-The user previously confirmed that `/health` worked and the earlier Python acknowledgement-only `/messages` returned HTTP 200. That was before the TypeScript migration. The current Node app has been rebuilt and exercised: `/messages` successfully reached Groq and returned a follow-up asking for the missing trip ID and date. The timeout issue was caused by passing `GROQ_TIMEOUT_SECONDS` directly to an SDK option that expects milliseconds; the client now converts seconds to milliseconds. The new database claim-investigation slice compiles, but has not yet been exercised at runtime. The earlier reply repeated its question in Hinglish and English; wording cleanup remains.
+Groq understanding and PaySwift payouts are both wired through. The default model is `qwen/qwen3.8-27b` because `openai/gpt-oss-20b` hit its 200,000 token daily cap and spends extra reasoning tokens. PaySwift's sandbox delays some creates by 8 seconds, rejects some with HTTP 503, and sometimes stores a payout then answers HTTP 504. The client waits 15 seconds, retries those responses with the same idempotency key, and checks the ledger before opening an approval. An isolated evaluator run on 2026-11-01 passed 24/24. That run is recorded in `eval-results.json`. Operations approve/reject in the sandbox was not part of that run.
 
 ### Remaining work
 
-- Run the new rider/trip/payout investigation against representative trip-level, day-level, missing-data, and out-of-window messages; refine replies and multi-message context.
-- Rebuild and manually exercise PaySwift success, rejection, ambiguous-result, ledger-reconciliation, and daily-limit flows.
-- Rebuild and manually review the operations page and approve/reject sandbox behavior; this latest slice was TypeScript-compiled only.
-- Complete evals, CI, and submission evidence. The root README must remain at most one page; raw AI exports belong in `ai-logs/`.
-- No tests have been run. Do not describe changes as verified unless they have actually been exercised.
+- Manually exercise operations approve/reject sandbox behavior. The page renders locally; those payment and rejection actions were not part of the 24/24 evaluator run.
+- Add the GitHub Actions `GROQ_API_KEY` secret, export raw AI sessions to `ai-logs/`, and complete submission logistics. The README should remain at most one page.
 
 ## Code layout
 

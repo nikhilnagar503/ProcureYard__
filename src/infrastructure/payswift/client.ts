@@ -63,7 +63,13 @@ export class PaySwiftClient {
 
   constructor(options: { baseUrl?: string; timeoutMs?: number; fetchImpl?: typeof fetch } = {}) {
     this.baseUrl = (options.baseUrl ?? process.env.PAYSWIFT_BASE_URL ?? "http://localhost:8081").replace(/\/$/, "");
-    this.timeoutMs = options.timeoutMs ?? Number(process.env.PAYSWIFT_TIMEOUT_MS ?? "1000");
+    // Local PaySwift may need a little longer during Docker startup or under
+    // load. Keep retries bounded and idempotent, but avoid treating a healthy
+    // response just beyond one second as an uncertain payment.
+    // Slow sandbox responses sleep for 8s, and an outage response sleeps for 10s.
+    // A shorter timeout aborts while that request is still in flight, which then
+    // looks like a failed payment even though PaySwift may still record it.
+    this.timeoutMs = options.timeoutMs ?? Number(process.env.PAYSWIFT_TIMEOUT_MS ?? "15000");
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -91,9 +97,10 @@ export class PaySwiftClient {
     });
     const body = await this.readBody(response);
     if (!response.ok) {
-      const retryable = response.status === 429 || response.status >= 500;
-      const uncertain = retryable || response.status === 409;
-      throw new PaySwiftError(`PaySwift rejected the payout request with HTTP ${response.status}.`, response.status, retryable, uncertain);
+      // 409 "still being processed" is the in-flight copy of this same idempotency
+      // key. Retrying it is safe and is how a timed-out create is recovered.
+      const retryable = response.status === 429 || response.status >= 500 || response.status === 409;
+      throw new PaySwiftError(`PaySwift rejected the payout request with HTTP ${response.status}.`, response.status, retryable, retryable);
     }
     const responseBody = object(body);
     const payout = parsePayout(responseBody?.data ?? body, request.rider_id, request.amount, request.reference);

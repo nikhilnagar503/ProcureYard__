@@ -1,0 +1,509 @@
+{
+  "run_at": "2026-10-31T22:14:52.779521+00:00",
+  "service_url": "http://localhost:8000",
+  "fresh_service_required_per_conversation": true,
+  "isolated_service_per_conversation": true,
+  "case_numbers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24
+  ],
+  "case_cooldown_seconds": 15,
+  "passed": 24,
+  "total": 24,
+  "results": [
+    {
+      "scenario": "vague complaint; the agent has to find the problem itself",
+      "rider_id": "R003",
+      "status": "PASS",
+      "observed": {
+        "payout": 25,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {
+          "pout_f95047deb0cf": 25
+        },
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "Could you share the trip ID or the date of the payout you want checked?",
+        "PaySwift confirms the verified shortfall payment of ₹25 for trips T516842, T662970, T781466, T754672, T612846, T886798, T926334, T164090, T867667 (payout pout_f95047deb0cf).",
+        "PaySwift confirms the verified shortfall payment of ₹25 for trips T516842, T662970, T781466, T754672, T612846, T886798, T926334, T164090, T867667 (payout pout_f95047deb0cf)."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "two problems in one message, then pushback",
+      "rider_id": "R027",
+      "status": "PASS",
+      "observed": {
+        "payout": 15,
+        "approval": 10,
+        "escalations": 0,
+        "new_payouts": {
+          "pout_e48282ba5b2d": 15
+        },
+        "new_ops_ids": [
+          "94c18d8e-01ed-44c6-82ad-bff071ae7763"
+        ],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "PaySwift confirms the verified shortfall payment of ₹15 for trips T158438, T939650, T247879, T829615, T531707, T273581, T115377, T604546, T999487 (payout pout_e48282ba5b2d). I verified a shortfall of ₹10, but the one automatic payment allowed for your account on 2026-11-01 has already been used or reserved. I have sent this claim to operations for approval. No payment has been made.",
+        "I verified a shortfall of ₹10, but the one automatic payment allowed for your account on 2026-11-01 has already been used or reserved. I have sent this claim to operations for approval. No payment has been made."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "rider disagrees with the answer",
+      "rider_id": "R011",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {},
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "I checked the payout records (including trips T652361, T360199, T693620, T660472, T278604 and 5 more) for 2026-09-19. Policy amount: ₹432; recorded payout: ₹432. Daily incentive: 10 completed trips; 12 required. The records show no additional amount is due.",
+        "I checked the payout records (including trips T652361, T360199, T693620, T660472, T278604 and 5 more) for 2026-09-19. Policy amount: ₹432; recorded payout: ₹432. Daily incentive: 10 completed trips; 12 required. The records show no additional amount is due."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "tries to act as another rider mid-conversation",
+      "rider_id": "R020",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": null,
+        "escalations": 1,
+        "new_payouts": {},
+        "new_ops_ids": [
+          "0bf6d9d3-989c-4c83-bff0-6ae5ccb6c48b"
+        ],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "Kripya batayein ki kis date ki trip ka payout kam aaya tha?",
+        "I can help only with the rider account linked to this number. I have sent this identity mismatch to the operations team for review."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "message delivered twice by the vendor",
+      "rider_id": "R003",
+      "status": "PASS",
+      "observed": {
+        "payout": 25,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {
+          "pout_9b4d9328d2c1": 25
+        },
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "PaySwift confirms the verified shortfall payment of ₹25 for trip T926334 (payout pout_9b4d9328d2c1).",
+        "PaySwift confirms the verified shortfall payment of ₹25 for trip T926334 (payout pout_9b4d9328d2c1)."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R005",
+      "status": "PASS",
+      "observed": {
+        "payout": 150,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {
+          "pout_a5c9ac4a7024": 150
+        },
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "PaySwift confirms the verified shortfall payment of ₹150 for trips T815383, T802235, T621300, T281890, T335141, T681635, T547576, T729833, T508700, T454306, T253744, T784434, T859165 (payout pout_a5c9ac4a7024)."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R008",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {},
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "I checked the trip T252921 for 2026-09-20. Policy amount: ₹46; recorded payout: ₹46. The records show no additional amount is due."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R013",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {},
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "Could you share the trip ID related to the payout issue?"
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R014",
+      "status": "PASS",
+      "observed": {
+        "payout": 10,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {
+          "pout_7987ccd1d417": 10
+        },
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "PaySwift confirms the verified shortfall payment of ₹10 for trips T218482, T786843, T578128, T146459, T288853, T820973, T637155, T815078, T703826 (payout pout_7987ccd1d417)."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R016",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": 425,
+        "escalations": 0,
+        "new_payouts": {},
+        "new_ops_ids": [
+          "f2ebdaa9-0f0e-43ef-bb0d-883a309047f7"
+        ],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "I verified a shortfall of ₹425. This is above the ₹200 automatic limit, so I have sent it to operations for approval. No payment has been made."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R021",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": null,
+        "escalations": 1,
+        "new_payouts": {},
+        "new_ops_ids": [
+          "43ffdb93-a580-4ddc-9b69-adaa32c410cd"
+        ],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "The trip details do not match the rider account linked to this number. I have sent the case to the operations team to review."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R022",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": null,
+        "escalations": 1,
+        "new_payouts": {},
+        "new_ops_ids": [
+          "67fd61b4-63da-47a0-91bd-fe58fd6687fe"
+        ],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "I could not verify this claim from the available records: trip T502951 is outside the seven-day review window. I have sent it to the operations team for review."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R024",
+      "status": "PASS",
+      "observed": {
+        "payout": 150,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {
+          "pout_e9bce01ecdb9": 150
+        },
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "PaySwift confirms the verified shortfall payment of ₹150 for trips T466945, T616245, T296270, T975912, T433551, T154552, T267669, T470944, T524860, T568715, T420065, T552357 (payout pout_e9bce01ecdb9)."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R025",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {},
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "I checked the payout records (including trips T409035, T227217, T433282, T948967, T738370 and 6 more) for 2026-09-19. Policy amount: ₹439; recorded payout: ₹439. Daily incentive: 11 completed trips; 12 required. The records show no additional amount is due."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R007",
+      "status": "PASS",
+      "observed": {
+        "payout": 34,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {
+          "pout_99337cf3ccff": 34
+        },
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "PaySwift confirms the verified shortfall payment of ₹34 for trip T840677 (payout pout_99337cf3ccff)."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R031",
+      "status": "PASS",
+      "observed": {
+        "payout": 22,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {
+          "pout_950c39b85320": 22
+        },
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "PaySwift confirms the verified shortfall payment of ₹22 for trip T312538 (payout pout_950c39b85320)."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R009",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {},
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "I checked the payout records (including trips T314207, T459101, T692307, T329037, T384654 and 6 more) for 2026-09-17. Policy amount: ₹360; recorded payout: ₹360. Daily incentive: 11 completed trips; 12 required. The records show no additional amount is due."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R026",
+      "status": "PASS",
+      "observed": {
+        "payout": 32,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {
+          "pout_4bc57310bf98": 32
+        },
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "PaySwift confirms the verified shortfall payment of ₹32 for trip T672899 (payout pout_4bc57310bf98)."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R033",
+      "status": "PASS",
+      "observed": {
+        "payout": 176,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {
+          "pout_e6b879613e3b": 176
+        },
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "PaySwift confirms the verified shortfall payment of ₹176 for trips T795007, T206956 (payout pout_e6b879613e3b)."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R034",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": 249,
+        "escalations": 0,
+        "new_payouts": {},
+        "new_ops_ids": [
+          "961a6851-521e-4371-ab01-ddea1053e74c"
+        ],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "I verified a shortfall of ₹249. This is above the ₹200 automatic limit, so I have sent it to operations for approval. No payment has been made."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R035",
+      "status": "PASS",
+      "observed": {
+        "payout": 25,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {
+          "pout_a5b389a2df7b": 25
+        },
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "PaySwift confirms the verified shortfall payment of ₹25 for trip T980582 (payout pout_a5b389a2df7b)."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R036",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {},
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "I checked the trip T990831 for 2026-09-18. Policy amount: ₹52; recorded payout: ₹52. The records show no additional amount is due."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R028",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {},
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "I checked the trip T849302 for 2026-09-21. Policy amount: ₹-10; recorded payout: ₹-10. The records show no additional amount is due."
+      ],
+      "failures": []
+    },
+    {
+      "scenario": "single message",
+      "rider_id": "R037",
+      "status": "PASS",
+      "observed": {
+        "payout": 0,
+        "approval": null,
+        "escalations": 0,
+        "new_payouts": {},
+        "new_ops_ids": [],
+        "duplicate_replay_same_reply": true,
+        "trace_ordered": true
+      },
+      "replies": [
+        "Namaste, main aapki kisi bhi payment ya dispute ki approval ya amount decide nahi kar sakta. Kripya apna specific payout issue detail ke saath bataiye."
+      ],
+      "failures": []
+    }
+  ]
+}

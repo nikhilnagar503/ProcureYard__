@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Pool, PoolClient } from "pg";
+import { istDate } from "../domain/payouts.js";
 import {
   appendInvestigationContext,
   InvestigationEvent,
@@ -36,52 +37,8 @@ export async function receiveMessage(
   args: { messageId: string; riderId: string; text: string; receivedAt: Date },
   paySwift: PaySwiftClient = new PaySwiftClient(),
 ): Promise<string> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const inserted = await client.query(
-      `INSERT INTO inbound_messages (message_id, rider_id, text, received_at, reply, processing_status)
-       VALUES ($1, $2, $3, $4, NULL, 'processing')
-       ON CONFLICT (message_id) DO NOTHING RETURNING message_id`,
-      [args.messageId, args.riderId, args.text, args.receivedAt],
-    );
-
-    if (inserted.rowCount === 0) {
-      const existing = await client.query<StoredInboundMessage>(
-        `SELECT rider_id, text, received_at, reply, processing_status
-         FROM inbound_messages WHERE message_id = $1 FOR UPDATE`,
-        [args.messageId],
-      );
-      const stored = existing.rows[0];
-      if (!stored) throw new StoredMessageUnavailable("A duplicate message could not be loaded.");
-      if (stored.rider_id !== args.riderId || stored.text !== args.text || stored.received_at.getTime() !== args.receivedAt.getTime()) {
-        throw new MessageIdConflict("message_id has already been used for different message content.");
-      }
-      if (stored.processing_status === "processed" && stored.reply !== null) {
-        await client.query("COMMIT");
-        return stored.reply;
-      }
-      if (stored.processing_status === "processing") {
-        throw new StoredMessageUnavailable("The earlier copy of this message is still being processed.");
-      }
-      await client.query(
-        `UPDATE inbound_messages SET processing_status = 'processing', reply = NULL WHERE message_id = $1`,
-        [args.messageId],
-      );
-    } else {
-      await addTrace(client, args.riderId, "message_in", "inbound_message", {
-        message_id: args.messageId,
-        text: args.text,
-        received_at: args.receivedAt.toISOString(),
-      }, null);
-    }
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  const replay = await acquireMessage(pool, args);
+  if (replay !== null) return replay;
 
   try {
     const { state, recentMessages } = await loadContext(pool, args.riderId, args.messageId);
@@ -111,11 +68,20 @@ export async function receiveMessage(
       existingIssues: modelIssueContext(state.issues),
       recentMessages,
     });
-    const result = sanitizeUnderstanding(modelResult, {
+    let result = sanitizeUnderstanding(modelResult, {
       text: args.text,
       riderId: args.riderId,
       receivedAt: args.receivedAt,
+      existingIssues: state.issues,
     });
+    const priorFollowUp = resolveExistingClaimFollowUp(args.text, state);
+    if (priorFollowUp) {
+      // A payment-status or approval reminder must not reopen the verified
+      // claim and run its payment/approval decision path a second time.
+      result = { ...result, updates: [], identity_mismatch: false, reply: priorFollowUp };
+    } else {
+      result = attachOpenIssueFollowUp(result, args.text, state, args.receivedAt);
+    }
     await addTraceToPool(pool, args.riderId, "model", "groq_message_understanding", {
       message_id: args.messageId,
       active_issue_ids: state.issues.map((issue) => issue.issue_id ?? null),
@@ -169,6 +135,139 @@ interface ConversationState {
   [key: string]: unknown;
 }
 
+async function acquireMessage(
+  pool: Pool,
+  args: { messageId: string; riderId: string; text: string; receivedAt: Date },
+): Promise<string | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const client = await pool.connect();
+    let waitForInFlight = false;
+    try {
+      await client.query("BEGIN");
+      const inserted = await client.query(
+        `INSERT INTO inbound_messages (message_id, rider_id, text, received_at, reply, processing_status)
+         VALUES ($1, $2, $3, $4, NULL, 'processing')
+         ON CONFLICT (message_id) DO NOTHING RETURNING message_id`,
+        [args.messageId, args.riderId, args.text, args.receivedAt],
+      );
+      if (inserted.rowCount === 0) {
+        const existing = await client.query<StoredInboundMessage>(
+          `SELECT rider_id, text, received_at, reply, processing_status
+           FROM inbound_messages WHERE message_id = $1 FOR UPDATE`,
+          [args.messageId],
+        );
+        const stored = existing.rows[0];
+        if (!stored) throw new StoredMessageUnavailable("A duplicate message could not be loaded.");
+        if (stored.rider_id !== args.riderId || stored.text !== args.text || stored.received_at.getTime() !== args.receivedAt.getTime()) {
+          throw new MessageIdConflict("message_id has already been used for different message content.");
+        }
+        if (stored.processing_status === "processed" && stored.reply !== null) {
+          await client.query("COMMIT");
+          return stored.reply;
+        }
+        if (stored.processing_status === "processing") {
+          await client.query("COMMIT");
+          waitForInFlight = true;
+        } else {
+          await client.query(
+            `UPDATE inbound_messages SET processing_status = 'processing', reply = NULL WHERE message_id = $1`,
+            [args.messageId],
+          );
+          await client.query("COMMIT");
+          return null;
+        }
+      } else {
+        await addTrace(client, args.riderId, "message_in", "inbound_message", {
+          message_id: args.messageId,
+          text: args.text,
+          received_at: args.receivedAt.toISOString(),
+        }, null);
+        await client.query("COMMIT");
+        return null;
+      }
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    if (!waitForInFlight) continue;
+    const waited = await waitForInFlightMessage(pool, args.messageId, 90_000);
+    if (waited.kind === "reply") return waited.reply;
+    if (waited.kind === "failed") continue;
+    throw new StoredMessageUnavailable("The earlier copy of this message is still being processed.");
+  }
+  throw new StoredMessageUnavailable("The earlier copy of this message is still being processed.");
+}
+
+async function waitForInFlightMessage(
+  pool: Pool,
+  messageId: string,
+  timeoutMs: number,
+): Promise<{ kind: "reply"; reply: string } | { kind: "failed" } | { kind: "pending" }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await pool.query<{ reply: string | null; processing_status: string }>(
+      `SELECT reply, processing_status FROM inbound_messages WHERE message_id = $1`,
+      [messageId],
+    );
+    const row = result.rows[0];
+    if (row?.processing_status === "processed" && row.reply !== null) return { kind: "reply", reply: row.reply };
+    if (row?.processing_status === "failed") return { kind: "failed" };
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  return { kind: "pending" };
+}
+
+const followUpIssueTypes = new Set(["general_payout", "trip_payment", "surge", "daily_incentive", "cancellation_penalty", "distance", "other"]);
+
+function attachOpenIssueFollowUp(
+  result: MessageUnderstanding,
+  text: string,
+  state: ConversationState,
+  receivedAt: Date,
+): MessageUnderstanding {
+  if (result.identity_mismatch) return result;
+  const countCorrection = /\b\d+\s*(?:kiye(?:\s+the)?|kiya(?:\s+tha|\s+the)?)\b/i.test(text);
+  const relative = text.trim().match(/^(\d{1,2})\s*(?:wala|wali|waale)\b/i);
+  if (!countCorrection && !relative) return result;
+  const issue = [...state.issues].reverse().find((item) => typeof item.issue_id === "string");
+  if (!issue || typeof issue.issue_id !== "string") return result;
+  const targetsThisIssue = result.updates.some((update) =>
+    (update.action === "create" || update.action === "update") &&
+    update.issue_id === issue.issue_id &&
+    (update.dates.length > 0 || update.trip_ids.length > 0));
+  const createdWithFacts = result.updates.some((update) =>
+    update.action === "create" && (update.dates.length > 0 || update.trip_ids.length > 0));
+  if (targetsThisIssue || (createdWithFacts && !countCorrection)) return result;
+
+  let dates = Array.isArray(issue.dates) ? issue.dates.filter((date): date is string => typeof date === "string") : [];
+  if (relative) {
+    const latest = istDate(receivedAt);
+    const [year, month] = latest.split("-");
+    const candidate = `${year}-${month}-${String(Number(relative[1])).padStart(2, "0")}`;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(candidate) && candidate <= latest) dates = [candidate];
+  }
+  if (!dates.length) return result;
+  const issueType = typeof issue.issue_type === "string" && followUpIssueTypes.has(issue.issue_type)
+    ? issue.issue_type as IssueUpdate["issue_type"]
+    : "general_payout";
+  return {
+    ...result,
+    updates: [{
+      action: "update",
+      issue_id: issue.issue_id,
+      issue_type: issueType,
+      summary: typeof issue.summary === "string" ? issue.summary : "Follow-up on the open payout issue",
+      trip_ids: Array.isArray(issue.trip_ids) ? issue.trip_ids.filter((id): id is string => typeof id === "string" && /^T\d{6}$/.test(id)) : [],
+      dates,
+      missing_information: [],
+      follow_up_question: null,
+    }],
+  };
+}
+
 async function loadContext(pool: Pool, riderId: string, currentMessageId: string): Promise<{
   state: ConversationState;
   recentMessages: RecentMessage[];
@@ -211,6 +310,26 @@ function modelIssueContext(issues: Record<string, unknown>[]): Record<string, un
   ));
 }
 
+function resolveExistingClaimFollowUp(text: string, state: ConversationState): string | null {
+  const outcomes = Array.isArray(state.latest_investigations)
+    ? state.latest_investigations.filter(isJsonObject)
+    : [];
+  const normalized = text.toLowerCase();
+  const asksPaymentStatus = /\b(kab\s+tak|kab\s+aayega|kab\s+milega|when\s+(?:will|does)|payment\s+status|status\s+kya|aaya\s+nahi|aayega)\b/i.test(normalized);
+  if (asksPaymentStatus) {
+    const paid = [...outcomes].reverse().find((item) => item.decision_path === "payment_succeeded");
+    if (paid && typeof paid.reply === "string") return paid.reply;
+  }
+
+  const requestedAmount = /(?:₹|rs\.?\s*)?(\d+)\s*(?:wala|wali|waala|waali)\b/i.exec(normalized)?.[1];
+  if (!requestedAmount || !/\b(abhi|de\s+do|bhej|send|pay|approve|jaldi)\b/i.test(normalized)) return null;
+  const pending = [...outcomes].reverse().find((item) =>
+    Number(item.decision_amount_rupees) === Number(requestedAmount) &&
+    ["large_claim_approval", "repeat_claim_approval", "daily_limit_approval", "payment_provider_unavailable", "payment_result_uncertain", "payment_failed_review"].includes(String(item.decision_path)));
+  if (pending && typeof pending.reply === "string") return pending.reply;
+  return null;
+}
+
 function applyUpdates(
   state: ConversationState,
   result: MessageUnderstanding,
@@ -221,18 +340,21 @@ function applyUpdates(
   const targets: InvestigationTarget[] = [];
   if (!result.identity_mismatch) {
     for (const update of result.updates) {
+      if (update.action === "no_change") continue;
       const issue = issueState(update, receivedAt);
-      if (update.action === "create" && update.issue_id === null) {
-        const issueId = randomUUID();
-        issues.push({ issue_id: issueId, ...issue });
-        targets.push({ issueId, update });
-      } else if (update.action === "update" && update.issue_id) {
-        const index = issues.findIndex((existing) => existing.issue_id === update.issue_id);
-        if (index >= 0) {
-          issues[index] = { issue_id: update.issue_id, ...issue };
-          targets.push({ issueId: update.issue_id, update });
-        }
+      const existingIndex = update.issue_id
+        ? issues.findIndex((existing) => existing.issue_id === update.issue_id)
+        : -1;
+      if (update.action === "update" && existingIndex >= 0 && update.issue_id) {
+        issues[existingIndex] = { issue_id: update.issue_id, ...issue };
+        targets.push({ issueId: update.issue_id, update });
+        continue;
       }
+      // Models often invent an issue id on a brand-new complaint. Keep the
+      // complaint and assign our own id so the records still get checked.
+      const issueId = randomUUID();
+      issues.push({ issue_id: issueId, ...issue });
+      targets.push({ issueId, update });
     }
   }
   return {

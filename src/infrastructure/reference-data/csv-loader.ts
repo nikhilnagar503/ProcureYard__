@@ -89,12 +89,17 @@ export function loadReferenceData(dataDirectory: string): ReferenceData {
   const riderIds = new Set(riders.keys());
   const tripsById = new Map<string, TripRecord>();
   for (const row of rows(path.join(root, "trips.csv"))) {
+    const rawDistance = new Decimal(parseDecimal(row.distance_km, "distance_km"));
+    // The supplied reference file mixes kilometre values (for example 6.0)
+    // with metre values (for example 5000). Normalize metre-scale values at
+    // ingestion so every downstream policy calculation receives kilometres.
+    const distanceKm = rawDistance.greaterThan(100) ? rawDistance.dividedBy(1000) : rawDistance;
     const trip: TripRecord = {
       tripId: row.trip_id.trim(),
       riderId: matchRiderId(row.rider_id, riderIds),
       startedAt: parseTimestamp(row.started_at, "started_at"),
       status: row.status as TripRecord["status"],
-      distanceKm: parseDecimal(row.distance_km, "distance_km"),
+      distanceKm: distanceKm.toString(),
       surgeMultiplier: parseDecimal(row.surge_multiplier, "surge_multiplier"),
     };
     if (!trip.tripId || !["completed", "cancelled_by_rider", "cancelled_by_customer"].includes(trip.status)) {

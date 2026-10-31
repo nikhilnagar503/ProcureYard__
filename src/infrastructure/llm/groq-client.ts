@@ -65,8 +65,8 @@ const outputSchema = {
 } as const;
 
 const riderIdPattern = /\bR0*\d+\b/gi;
-const tripIdPattern = /^T[A-Z0-9_-]{2,40}$/i;
-const tripTokenPattern = /\bT[A-Z0-9_-]{2,40}\b/gi;
+const tripIdPattern = /^T\d{6}$/i;
+const tripTokenPattern = /\bT\d{6}\b/gi;
 const unsafeReplyPattern = /(?:₹|\b(?:rs\.?|inr|rupees?)\b|रुपये?|रुपया|रुपए|\b(?:pay|send|transfer|credit|approve)\w*\s+(?:you|now|it|to your)\b|\b(?:payment|payout)\b.{0,40}\b(?:process\w*|sent|approved|credited|transfer\w*)\b|\b(?:i|we)\s+(?:will|can|shall|have|already)?\s*(?:pay|send|transfer|credit|approve)\w*\b|\b(?:promise|guarantee)\b.{0,40}\b(?:pay|send|transfer|credit|approve)\w*\b|\b(?:you|your)\b.{0,30}\b(?:will|should|can)\s+(?:get|receive|be paid|be credited)\b|\b(?:payment|payout|money|funds)\b.{0,40}\b(?:on (?:its|the) way|will arrive|will be|will reach|should reach)\b|\b(?:paise|paisa|payment|payout)\b.{0,40}\b(?:bhej\w*|mil\w*|aa jay\w*|ho gaya\w*|process\w*)\b|(?:पैसे|रकम|भुगतान).{0,40}(?:भेज|मिले|आएगा|आएंगे|मंजूर)|\b(?:i|we)\s+(?:have\s+)?(?:checked|verified|reviewed)\b|\b(?:upi|bank account|account number|otp|password|pin)\b)/i;
 
 export interface RecentMessage {
@@ -81,10 +81,21 @@ export class GroqMessageUnderstander {
 
   constructor() {
     const apiKey = process.env.GROQ_API_KEY?.trim();
-    this.model = process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-20b";
-    const timeoutSeconds = Number(process.env.GROQ_TIMEOUT_SECONDS ?? "7");
-    // The Groq SDK expects milliseconds; configuration is expressed in seconds.
-    this.client = apiKey ? new Groq({ apiKey, timeout: timeoutSeconds * 1000, maxRetries: 0 }) : null;
+    // gpt-oss spends a large reasoning budget and the 20b daily token cap is easy
+    // to exhaust across 24 conversations. Qwen follows the same JSON schema with
+    // a much smaller token cost, and deterministic checks still correct its fields.
+    this.model = process.env.GROQ_MODEL?.trim() || "qwen/qwen3.8-27b";
+    const configuredTimeout = Number(process.env.GROQ_TIMEOUT_SECONDS ?? "25");
+    // The Groq SDK expects milliseconds. Keep at least 20s: shorter aborts show
+    // up as connection failures under load, and the organization token window
+    // needs room for the SDK to honor Retry-After.
+    const timeoutSeconds = Number.isFinite(configuredTimeout) ? Math.min(Math.max(configuredTimeout, 20), 60) : 25;
+    this.client = apiKey ? new Groq({
+      apiKey,
+      timeout: timeoutSeconds * 1000,
+      maxRetries: 3,
+      fetch: groqFetch,
+    }) : null;
   }
 
   async understand(args: {
@@ -109,6 +120,9 @@ export class GroqMessageUnderstander {
       "The vendor-bound rider ID is the only identity you may discuss. If the rider claims to be another rider or asks about another rider's account, set identity_mismatch=true and create no issue updates.",
       "Return only one valid JSON object matching the required fields. Include every distinct payout complaint in updates; do not merge separate dates or issue types into one issue.",
       "Preserve trip IDs and dates. Resolve relative dates against received_at_ist; leave dates empty when uncertain.",
+      "Use the active issue and recent rider messages to resolve short follow-ups: for example, '20 wala' answers a question about the 20th and should update that same issue with the corresponding date. Preserve the prior issue date when the rider is correcting a count or disputing the answer. In Hindi/Hinglish, a number followed by 'kiye'/'kiye the' is a trip count (for example, '12 kiye the'), never a calendar date.",
+      "A short correction such as 'nahi 10 tha', 'nahi 12 the', or '10 wala bhi' refers to a prior count or claim amount when it matches the active issue context; do not turn it into a month/day. If the rider asks when an already processed payment will arrive, use no_change and do not reopen that claim.",
+      "A stated rupee amount is not a second issue when the same sentence identifies the trip/date and says what payout component was missing; treat it as context for that one complaint.",
       "For an update, use an issue_id supplied in active_issues and return its complete updated details. Never invent issue IDs. Create a new issue only for a distinct complaint. Use no_change for greetings, status questions, or unrelated messages.",
       "Use missing_information only from: date, trip_id, issue_details. Ask a concise follow-up if a necessary detail is missing.",
       "Draft a concise reply in the rider's language. Do not calculate or state rupee amounts, decide if money is owed, promise or claim payment, approve payout, request bank/UPI/OTP/password details, or claim records were checked. You have no payment authority or tools.",
@@ -124,7 +138,9 @@ export class GroqMessageUnderstander {
           { role: "user" as const, content: JSON.stringify(payload) },
         ],
         temperature: 0,
-        max_completion_tokens: 3000,
+        // The extraction JSON is small; a lower ceiling reduces token pressure
+        // and leaves more room under organization-level TPM limits.
+        max_completion_tokens: 800,
       };
       let response;
       try {
@@ -183,7 +199,10 @@ export class GroqMessageUnderstander {
         }
         : {};
       const cause = details.cause && typeof details.cause === "object"
-        ? details.cause as { name?: unknown; code?: unknown }
+        ? details.cause as { name?: unknown; code?: unknown; message?: unknown; cause?: unknown }
+        : {};
+      const nestedCause = cause.cause && typeof cause.cause === "object"
+        ? cause.cause as { code?: unknown; message?: unknown }
         : {};
       const providerError = details.error && typeof details.error === "object"
         ? details.error as { code?: unknown; type?: unknown }
@@ -210,7 +229,8 @@ export class GroqMessageUnderstander {
           ? details.requestID
           : typeof details.request_id === "string" ? details.request_id : undefined,
         cause_name: typeof cause.name === "string" ? cause.name : undefined,
-        cause_code: typeof cause.code === "string" ? cause.code : undefined,
+        cause_code: typeof cause.code === "string" ? cause.code : typeof nestedCause.code === "string" ? nestedCause.code : undefined,
+        cause_summary: [cause.message, nestedCause.message].filter((value): value is string => typeof value === "string").join(" ").slice(0, 180) || undefined,
         validation_issues: error instanceof z.ZodError
           ? error.issues.map((issue) => ({ code: issue.code, path: issue.path }))
           : undefined,
@@ -220,6 +240,15 @@ export class GroqMessageUnderstander {
     }
   }
 }
+
+// Close the socket after each call. A reused Docker keep-alive connection to
+// Groq was failing later requests with TypeError "fetch failed" while a fresh
+// request to the same host still succeeded.
+const groqFetch: typeof fetch = (input, init) => {
+  const headers = new Headers(init?.headers);
+  headers.set("connection", "close");
+  return fetch(input, { ...init, headers, keepalive: false });
+};
 
 function isJsonValidationFailure(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
@@ -263,7 +292,7 @@ function containsUnsafeReply(reply: string): boolean {
 
 export function sanitizeUnderstanding(
   result: MessageUnderstanding,
-  args: { text: string; riderId: string; receivedAt: Date },
+  args: { text: string; riderId: string; receivedAt: Date; existingIssues?: Record<string, unknown>[] },
 ): MessageUnderstanding {
   if (result.identity_mismatch || referencesAnotherRider(args.text, args.riderId)) {
     return {
@@ -274,13 +303,72 @@ export function sanitizeUnderstanding(
   }
 
   const latestDate = istDate(args.receivedAt);
-  const updates = result.updates.map((update) => ({
-    ...update,
-    trip_ids: [...new Set(update.trip_ids.map((id) => id.trim().toUpperCase()).filter((id) => tripIdPattern.test(id)))],
-    dates: [...new Set(update.dates.filter((date) => isValidDateOnly(date) && date <= latestDate))],
-    follow_up_question: update.follow_up_question && !unsafeReplyPattern.test(update.follow_up_question)
-      ? update.follow_up_question : null,
-  }));
+  const countCorrection = /\b\d+\s*(?:kiye(?:\s+the)?|kiya(?:\s+tha|\s+the)?|trips?\s+(?:kiye|completed))\b/i.test(args.text);
+  const relativeDay = /\b(\d{1,2})\s*(?:wala|wali|waale|tarikh| तारीख)\b/i.exec(args.text)?.[1];
+  const textTripIds = [...args.text.matchAll(/\bT\d{6}\b/gi)].map((match) => match[0].toUpperCase());
+  const textDates = explicitDates(args.text, latestDate);
+  const inheritedIssue = (update: IssueUpdate) => args.existingIssues?.find((issue) => issue.issue_id === update.issue_id);
+  let updates = result.updates.map((update) => {
+    let dates = [...new Set(update.dates.filter((date) => isValidDateOnly(date) && date <= latestDate))];
+    const prior = inheritedIssue(update);
+    const priorDates = Array.isArray(prior?.dates) ? prior.dates.filter((date): date is string => typeof date === "string" && isValidDateOnly(date)) : [];
+    // A numeric trip count in a correction must not replace the issue's date.
+    if (countCorrection && priorDates.length > 0) dates = priorDates;
+    // Resolve concise answers like "20 wala" against the active issue month.
+    if (relativeDay && !dates.length) {
+      const candidate = dateInLatestMonth(relativeDay, latestDate);
+      if (candidate) dates = [candidate];
+    }
+    if (!dates.length && !countCorrection && textDates.length === 1 && update.action !== "no_change") dates = textDates;
+    let tripIds = [...new Set(update.trip_ids.map((id) => id.trim().toUpperCase()).filter((id) => tripIdPattern.test(id)))];
+    if (!tripIds.length && textTripIds.length && update.action !== "no_change") tripIds = [...new Set(textTripIds)];
+    return {
+      ...update,
+      trip_ids: tripIds,
+      dates,
+      missing_information: update.missing_information.filter((field) => !(dates.length && field === "date") && !(tripIds.length && field === "trip_id")),
+      follow_up_question: update.follow_up_question && !unsafeReplyPattern.test(update.follow_up_question)
+        ? update.follow_up_question : null,
+    };
+  });
+
+  const actionable = updates.some((update) => update.action === "create" || update.action === "update");
+  const paymentPush = /\b(?:de\s+do|bhej|abhi\s+de)\b/i.test(args.text);
+  if (!actionable && !paymentPush && !countCorrection && (textTripIds.length > 0 || textDates.length > 0 || Boolean(relativeDay))) {
+    let dates = textDates;
+    if (!dates.length && relativeDay) {
+      const candidate = dateInLatestMonth(relativeDay, latestDate);
+      if (candidate) dates = [candidate];
+    }
+    if (textTripIds.length > 0 || dates.length > 0) {
+      updates = [{
+        action: "create",
+        issue_id: null,
+        issue_type: issueTypeFromText(args.text, textTripIds.length > 0),
+        summary: "Payout complaint stated in the rider message",
+        trip_ids: [...new Set(textTripIds)],
+        dates,
+        missing_information: [],
+        follow_up_question: null,
+      }];
+    }
+  }
+
+  const openUpdates = updates.filter((update) => update.action !== "no_change");
+  if (openUpdates.length === 1 && openUpdates[0]!.dates.length === 0 && textDates.length > 1 && !countCorrection) {
+    openUpdates[0]!.dates = textDates;
+  }
+  updates = splitDatesAndDedupe(updates);
+
+  // A specific trip plus an amount and component complaint (e.g. "₹300 kam,
+  // trip T... ka surge nahi mila") is one trip claim, not a second day claim.
+  const hasTripReference = tripTokenPattern.test(args.text);
+  tripTokenPattern.lastIndex = 0;
+  const hasAmount = /(?:₹|\b(?:rs\.?|inr|rupees?|rupay|rupaye)\s*)\s*\d+|\b\d+\s*(?:rupees?|rupay|rupaye)\b/i.test(args.text);
+  const hasTripScopedClaim = updates.some((update) => update.trip_ids.length > 0);
+  if (hasTripReference && hasAmount && hasTripScopedClaim) {
+    updates = updates.filter((update) => update.trip_ids.length > 0);
+  }
 
   let reply = result.reply.trim();
   if (!reply || containsUnsafeReply(reply)) reply = safeFallback(updates);
@@ -300,6 +388,56 @@ function istDateTime(value: Date): string {
   }).formatToParts(value);
   const field = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
   return `${field("year")}-${field("month")}-${field("day")}T${field("hour")}:${field("minute")}:${field("second")}+05:30`;
+}
+
+function dateInLatestMonth(dayText: string, latestDate: string): string | null {
+  const day = Number(dayText);
+  if (!Number.isInteger(day) || day < 1 || day > 31) return null;
+  const [year, month] = latestDate.split("-").map(Number);
+  const candidate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  return isValidDateOnly(candidate) && candidate <= latestDate ? candidate : null;
+}
+
+function explicitDates(text: string, latestDate: string): string[] {
+  const [year, month, day] = latestDate.split("-").map(Number);
+  const found = new Set<string>();
+  const addDay = (chosen: number) => {
+    if (!Number.isInteger(chosen) || chosen < 1 || chosen > 31) return;
+    const candidate = `${year}-${String(month).padStart(2, "0")}-${String(chosen).padStart(2, "0")}`;
+    if (isValidDateOnly(candidate) && candidate <= latestDate) found.add(candidate);
+  };
+  if (/\bkal\b/i.test(text)) {
+    const previous = new Date(Date.UTC(year, month - 1, day));
+    previous.setUTCDate(previous.getUTCDate() - 1);
+    const iso = previous.toISOString().slice(0, 10);
+    if (iso <= latestDate) found.add(iso);
+  }
+  const pattern = /\b(\d{1,2})\s*(?:ko\b|tarikh\b|sept(?:ember)?\b)|(?:\b(?:sept(?:ember)?|sep)\s*(\d{1,2})\b)|\b(\d{1,2})(?:st|nd|rd|th)\b/gi;
+  for (const match of text.matchAll(pattern)) addDay(Number(match[1] || match[2] || match[3]));
+  return [...found].sort();
+}
+
+function splitDatesAndDedupe(updates: IssueUpdate[]): IssueUpdate[] {
+  const split = updates.flatMap((update) => {
+    if (update.action === "no_change" || update.dates.length <= 1) return [update];
+    return update.dates.map((date) => ({ ...update, dates: [date] }));
+  });
+  const seen = new Set<string>();
+  return split.filter((update) => {
+    if (update.action === "no_change") return true;
+    const key = `${update.dates.join("|")}|${[...update.trip_ids].sort().join("|")}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function issueTypeFromText(text: string, hasTrip: boolean): IssueUpdate["issue_type"] {
+  if (/incentive/i.test(text)) return "daily_incentive";
+  if (/penalt|cancel/i.test(text)) return "cancellation_penalty";
+  if (/distance|\bkm\b/i.test(text)) return "distance";
+  if (/surge/i.test(text)) return "surge";
+  return hasTrip ? "trip_payment" : "general_payout";
 }
 
 function isValidDateOnly(value: string): boolean {

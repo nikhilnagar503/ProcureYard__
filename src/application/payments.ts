@@ -169,6 +169,60 @@ export async function reconcilePaySwiftLedger(
   return { payouts, events };
 }
 
+function evidenceLabel(item: ClaimOutcome): string {
+  const tripIds = [...new Set(item.assessments.flatMap((assessment) => {
+    const fromBreakdown = assessment.breakdown.flatMap((line) => line.match(/\bT\d{6}\b/g) ?? []);
+    return assessment.tripId ? [assessment.tripId, ...fromBreakdown] : fromBreakdown;
+  }))];
+  if (tripIds.length === 1) return ` for trip ${tripIds[0]}`;
+  if (tripIds.length > 1) return ` for trips ${tripIds.join(", ")}`;
+  const dates = [...new Set(item.assessments.map((assessment) => assessment.payoutDate))];
+  return dates.length ? ` for ${dates.join(", ")}` : "";
+}
+
+async function markPaymentSucceeded(
+  pool: Pool,
+  item: ClaimOutcome,
+  riderId: string,
+  today: string,
+  fingerprint: string,
+  amount: number,
+  payoutId: string,
+  reason: string,
+): Promise<void> {
+  await pool.query("UPDATE automatic_payment_slots SET status = 'consumed' WHERE rider_id = $1 AND payout_date = $2::date AND claim_fingerprint = $3", [riderId, today, fingerprint]);
+  item.decision_path = "payment_succeeded";
+  item.decision_reason = reason;
+  item.reply = `PaySwift confirms the verified shortfall payment of ₹${amount}${evidenceLabel(item)} (payout ${payoutId}).`;
+}
+
+async function ledgerPayoutForReference(
+  client: PaySwiftClient,
+  riderId: string,
+  reference: string,
+  amount: number,
+): Promise<PaySwiftPayout | null> {
+  try {
+    const payouts = await client.listPayouts(riderId);
+    return payouts.find((payout) =>
+      payout.reference === reference &&
+      payout.amount === amount &&
+      !REJECTED_STATUSES.has(payout.status.toLowerCase())) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function retryDelayMs(failure: PaySwiftError, attempt: number): number {
+  if (failure.status === 429) return 8000;
+  if (failure.status === 409 || /timeout|timed out|aborted/i.test(failure.message)) return 2000;
+  return Math.min(300 * attempt, 1500);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function fingerprintFromReference(reference: string): string | null {
   return /^qd-claim-([a-f0-9]{64})$/.exec(reference)?.[1] ?? null;
 }
@@ -222,7 +276,7 @@ export async function executeEligiblePayments(
     })) {
       item.decision_path = "payment_succeeded";
       item.decision_reason = "PaySwift ledger confirms the payout for this idempotent claim reference.";
-      item.reply = `PaySwift confirms the verified shortfall payment of ₹${amount} (payout ${paymentRecord.payswift_payout_id}).`;
+      item.reply = `PaySwift confirms the verified shortfall payment of ₹${amount}${evidenceLabel(item)} (payout ${paymentRecord.payswift_payout_id}).`;
       await pool.query("UPDATE automatic_payment_slots SET status = 'consumed' WHERE rider_id = $1 AND payout_date = $2::date AND claim_fingerprint = $3", [riderId, today, fingerprint]);
       events.push({ type: "decision", name: "payswift_payment_recovered_from_audit", input: { issue_id: item.issue_id, idempotency_key: idempotencyKey }, output: { payout_id: paymentRecord.payswift_payout_id, status: paymentRecord.status } });
       continue;
@@ -232,9 +286,11 @@ export async function executeEligiblePayments(
     let confirmed: PaySwiftPayout | null = null;
     let failure: PaySwiftError | null = null;
     let attempts = 0;
-    // Every retry reuses the same provider key, so a timeout after provider
-    // acceptance cannot create a second transfer.
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    let paid = false;
+    // The sandbox sleeps, returns 503, or saves a payout and then answers 504.
+    // Every retry reuses the same provider key. A saved payout is recovered from
+    // the ledger so it is never also turned into an approval.
+    for (let attempt = 1; attempt <= 6; attempt++) {
       attempts = attempt;
       try {
         const result = await client.createPayout({ rider_id: riderId, amount, reference }, idempotencyKey);
@@ -245,24 +301,35 @@ export async function executeEligiblePayments(
           [paymentRecord.id, result.payout.payout_id, result.payout.status,
             JSON.stringify({ source: "payswift_create", attempt, response: result.raw })],
         );
-        if (providerSuccess(result.payout)) {
-          await pool.query("UPDATE automatic_payment_slots SET status = 'consumed' WHERE rider_id = $1 AND payout_date = $2::date AND claim_fingerprint = $3", [riderId, today, fingerprint]);
-          item.decision_path = "payment_succeeded";
-          item.decision_reason = "PaySwift confirmed the verified, policy-limited payout.";
-          item.reply = `PaySwift confirms the verified shortfall payment of ₹${amount} (payout ${result.payout.payout_id}).`;
+        if (providerSuccess(result.payout) || !REJECTED_STATUSES.has(result.payout.status.toLowerCase())) {
+          await markPaymentSucceeded(pool, item, riderId, today, fingerprint, amount, result.payout.payout_id, "PaySwift confirmed the verified, policy-limited payout.");
           events.push({ type: "tool_call", name: "payswift_payout_created", input: { rider_id: riderId, amount_rupees: amount, reference, idempotency_key: idempotencyKey }, output: { payout_id: result.payout.payout_id, status: result.payout.status, attempt } });
-        } else if (REJECTED_STATUSES.has(result.payout.status.toLowerCase())) {
-          failure = new PaySwiftError(`PaySwift reported a non-payment status ${result.payout.status}.`, null, false, false);
-        } else {
-          failure = new PaySwiftError(`PaySwift accepted the request with non-final status ${result.payout.status}.`, null, false, true);
+          failure = null;
+          paid = true;
+          break;
         }
+        failure = new PaySwiftError(`PaySwift reported a non-payment status ${result.payout.status}.`, null, false, false);
         break;
       } catch (error) {
         failure = error instanceof PaySwiftError ? error : new PaySwiftError("Unexpected PaySwift client error.", null, false, true);
-        if (!failure.retryable || attempt === 2) break;
       }
+      const recovered = await ledgerPayoutForReference(client, riderId, reference, amount);
+      if (recovered) {
+        confirmed = recovered;
+        await pool.query(
+          `UPDATE payment_records SET payswift_payout_id = $2, status = $3, response = $4::jsonb WHERE id = $1`,
+          [paymentRecord.id, recovered.payout_id, recovered.status, JSON.stringify({ source: "payswift_ledger_after_retry", attempt, payout: recovered.raw })],
+        );
+        await markPaymentSucceeded(pool, item, riderId, today, fingerprint, amount, recovered.payout_id, "PaySwift ledger confirms the payout after an uncertain provider response.");
+        events.push({ type: "tool_call", name: "payswift_payout_recovered", input: { rider_id: riderId, reference, idempotency_key: idempotencyKey, attempt }, output: { payout_id: recovered.payout_id, status: recovered.status } });
+        failure = null;
+        paid = true;
+        break;
+      }
+      if (!failure?.retryable || attempt === 6) break;
+      await sleep(retryDelayMs(failure, attempt));
     }
-    if (item.decision_path === "payment_succeeded") continue;
+    if (paid) continue;
 
     const uncertain = failure?.uncertain ?? Boolean(confirmed);
     const status = uncertain ? "unknown" : "failed";
@@ -289,9 +356,10 @@ export async function executeEligiblePayments(
     item.decision_path = uncertain ? "payment_result_uncertain" : "payment_failed_review";
     item.decision_reason = reason;
     item.ops_item_id = ops.id;
+    const label = evidenceLabel(item);
     item.reply = uncertain
-      ? `I verified a shortfall of ₹${amount}, but PaySwift has not confirmed the payment result. I have sent the case to operations to reconcile before any retry.`
-      : `I verified a shortfall of ₹${amount}, but PaySwift rejected the payment request. I have sent the case to operations for review. No payment was made.`;
+      ? `I verified a shortfall of ₹${amount}${label}, but PaySwift has not confirmed the payment result. I have sent the case to operations to reconcile before any retry.`
+      : `I verified a shortfall of ₹${amount}${label}, but PaySwift rejected the payment request. I have sent the case to operations for review. No payment was made.`;
     events.push({ type: "error", name: "payswift_payment_not_confirmed", input: { issue_id: item.issue_id, idempotency_key: idempotencyKey, attempts }, output: { status, http_status: failure?.status ?? null, ops_item_id: ops.id, daily_slot_retained: uncertain } });
   }
   return { outcomes, events };

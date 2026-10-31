@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install
+      - run: npm run build
+      - name: Check evaluator syntax
+        run: python3 -m py_compile evals/run.py
+
+  conversation-eval:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        case: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check whether the Groq secret is configured
+        id: eval-gate
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          if [ -n "$GROQ_API_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "GROQ_API_KEY is not configured; conversation evaluation will be skipped."
+          fi
+      - name: Start app, database, and PaySwift sandbox
+        if: steps.eval-gate.outputs.enabled == 'true'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: docker compose up -d --build
+      - name: Wait for service readiness
+        if: steps.eval-gate.outputs.enabled == 'true'
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://localhost:8000/health >/dev/null && curl --fail --silent http://localhost:8081/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs app db payswift
+          exit 1
+      - name: Evaluate isolated supplied conversation
+        if: steps.eval-gate.outputs.enabled == 'true'
+        run: python3 evals/run.py http://localhost:8000 --case ${{ matrix.case }}
+      - name: Upload evaluator report
+        if: always() && steps.eval-gate.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversation-evaluation-${{ matrix.case }}
+          path: eval-results.json
+          if-no-files-found: error
+      - name: Stop containers
+        if: always() && steps.eval-gate.outputs.enabled == 'true'
+        run: docker compose down -v
