@@ -18,9 +18,11 @@ python3 evals/run.py http://localhost:8000
 
 The full run builds and restarts the local Compose stack for each conversation, clearing its Postgres volume and PaySwift sandbox so one case cannot affect another. It leaves the stack stopped when finished and writes failures to `eval-results.json`; allow several minutes for all 24 cases and Groq cooldowns. This clears local development data. To run one sample against an already-running stack, use `python3 evals/run.py http://localhost:8000 --case 1` (case 1–24). Evaluation results are read only through public service routes and the PaySwift ledger. GitHub Actions runs each case in its own clean Compose stack.
 
-## Design and assumptions
+## Architecture
 
-Node 24, TypeScript, Express, PostgreSQL, Docker Compose and Groq. Groq extracts the issue, trip/date details and missing information, then drafts wording; deterministic code calculates policy fare, the seven-day IST eligibility window, the ₹200 automatic cap, one automatic payout per rider per IST day, and the verified payable amount. PaySwift is the payment source of truth; PostgreSQL keeps audit copies. Stable idempotency keys are reused on retries. Operations approval uses only the stored, verified claim amount and never accepts an operator-entered amount. The included PaySwift service is a sandbox, not a real transfer provider.
+Docker Compose runs the Express app, PostgreSQL, and the supplied PaySwift sandbox. A complaint enters `POST /messages`. The app saves the conversation, asks Groq only to identify the issue and draft wording, then runs deterministic policy code over the trip and payout rows. An eligible shortfall is sent to PaySwift with a stable idempotency key. PostgreSQL keeps the conversation, the trace, and an audit copy of the payment. PaySwift remains the payment source of truth.
+
+Groq does not receive payout records or payment tools. Fare, the seven inclusive IST dates, the daily incentive, cancellation penalties, the ₹200 auto-pay cap, and one automatic payout per rider per IST day live in `src/domain/payouts.ts`. A larger amount, a second payout on the same IST day, or an uncertain provider result is queued for operations. Approve and reject on `/ops` reuse the stored verified amount and never take an amount from the operator. The included PaySwift service is a sandbox, not a real transfer provider.
 
 ## Evaluation
 
