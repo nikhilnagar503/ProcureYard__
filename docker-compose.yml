@@ -1,6 +1,41 @@
-# Starter file. Add your own services (your app, Postgres) next to payswift. Leave payswift as it is.
+# PaySwift is the assignment-provided sandbox service. Keep its setup unchanged.
 services:
   payswift:
     build: ./payswift
     ports:
       - "8081:8081"
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: procureyard
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d procureyard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/procureyard
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
+      GROQ_TIMEOUT_SECONDS: ${GROQ_TIMEOUT_SECONDS:-7}
+      DATA_DIR: /app/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

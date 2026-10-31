@@ -1,0 +1,79 @@
+# Project guide for coding agents
+
+Read this file before changing the project. Keep the implementation status current after meaningful slices and explain changes to the user in plain language.
+
+## Product and working style
+
+Build the Rider Payout Dispute Desk for QuickDrop/ProcureYard. Riders send payout complaints one message at a time. The service should understand and retain context, inspect trip and payout records, explain outcomes, make only policy-approved payments, and send unclear or higher-risk cases to operations.
+
+The user wants to build in small, reviewable slices. Explain each part simply and stop for review when asked. The current agreed stack is Node.js 24, TypeScript, Express, PostgreSQL, Docker Compose, and Groq. Keep payout calculations, eligibility, caps, and payment authorization deterministic; Groq handles understanding and wording only.
+
+## Authoritative requirements
+
+Read the relevant source files before changing behavior:
+
+- `BRIEF.md` — product request and required features.
+- `docs/policy.md` — payout rules.
+- `SUBMISSION.md` — API response shapes and submission requirements.
+- `data/README.md` and `data/conversations.json` — reference data and expected scenarios.
+- `payswift/README.md` — sandbox API.
+
+Required interface:
+
+- `GET /health` — HTTP 200 when the service and database are ready.
+- `POST /messages` — accepts `message_id`, `rider_id`, `text`, and timezone-aware `received_at`; returns at least `{"reply":"..."}`.
+- `GET /trace/{rider_id}` — ordered trace steps with `at`, `type`, `name`, `input`, and `output`.
+- `GET /ops/pending` — pending approvals and escalations.
+- Swagger at `/docs` is kept for local API exploration.
+- The complete assignment also requires an operations page, an evaluation command taking the service URL, Docker Compose, and GitHub Actions.
+
+## Payout policy
+
+- Completed trip: ₹25 base plus ₹6 per kilometre after the first 2 km; surge applies to the full fare; each trip rounds half-up to a whole rupee.
+- Incentive: ₹150 for 12 or more completed trips in one IST calendar day.
+- Rider cancellation penalty: ₹10. Customer cancellation: ₹0.
+- A dispute must fall within the seven inclusive IST calendar dates ending on `received_at`'s IST date.
+- Auto-pay at most ₹200 per dispute and once per rider per IST day. Larger or repeated amounts require operations approval. Never pay more than verified owed.
+- PaySwift is the payment source of truth. PostgreSQL payment rows are audit copies.
+
+## Current implementation status
+
+The active implementation is TypeScript under `src/`. A local, Git-ignored snapshot of the prior Python source is kept under `.archive/python-stack/` for recovery; do not add or run it as a second backend.
+
+- `src/domain/payouts.ts` — deterministic fare, IST dispute-window, trip and day assessments using decimal arithmetic.
+- `src/infrastructure/reference-data/csv-loader.ts` — validates and loads the supplied CSVs, normalizes known rider ID variants, skips exact duplicate trips, and rejects conflicting duplicates.
+- `src/infrastructure/database/db.ts` — PostgreSQL schema creation, connection pool, and repeatable CSV upserts.
+- `src/infrastructure/llm/groq-client.ts` — strict structured extraction and reply drafting. It receives conversation context only, not payout records or payment tools. Deterministic filters check account identity, trip ID/date syntax, and unsafe replies.
+- `src/application/messages.ts` — idempotent inbound-message processing, conversation-state persistence, trace creation, and retry behavior.
+- `src/application/traces.ts`, `src/application/ops.ts` — ordered trace and pending-operations queries.
+- `src/app.ts`, `src/main.ts`, `src/api/openapi.ts` — Express routes, Swagger documentation, startup, reference import, and readiness.
+- `Dockerfile`, `docker-compose.yml`, `package.json`, `tsconfig.json`, `.env.example` — TypeScript container and local configuration. Keep the assignment-provided `payswift` service unchanged. Never commit `.env` or a real Groq key.
+
+The user previously confirmed that `/health` worked and the earlier Python acknowledgement-only `/messages` returned HTTP 200. That was before the TypeScript migration. The current Node app has been rebuilt and exercised: `/messages` successfully reached Groq and returned a follow-up asking for the missing trip ID and date. The timeout issue was caused by passing `GROQ_TIMEOUT_SECONDS` directly to an SDK option that expects milliseconds; the client now converts seconds to milliseconds. The reply wording included both Hinglish and English versions of the same question, which can be refined after user review.
+
+### Remaining work
+
+- Connect issue details to rider, trip, and payout lookups; apply policy and explain both shortfalls and non-shortfalls.
+- Enforce payment limits and create approval/escalation records.
+- Integrate PaySwift ledger reconciliation and idempotent payments.
+- Build the operations review page and approve/reject actions.
+- Complete evals, CI, and submission evidence. The root README must remain at most one page; raw AI exports belong in `ai-logs/`.
+- No tests have been run. Do not describe changes as verified unless they have actually been exercised.
+
+## Code layout
+
+- `src/api/` — Express routes and OpenAPI spec.
+- `src/application/` — request use cases and orchestration.
+- `src/domain/` — deterministic payout rules.
+- `src/infrastructure/database/` — PostgreSQL schema and reference import.
+- `src/infrastructure/reference-data/` — CSV parsing and validation.
+- `src/infrastructure/llm/` — Groq integration.
+- `src/infrastructure/payswift/` — future PaySwift client.
+- `src/templates/` — future operations UI.
+
+## Conventions
+
+- Preserve original assignment data and the provided PaySwift service.
+- Do not commit or push unless the user asks.
+- Do not expose secrets. Keep all required configuration in `.env.example`.
+- Keep changes in small reviewable slices and make clear what is still incomplete.
