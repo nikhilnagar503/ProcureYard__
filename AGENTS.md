@@ -45,8 +45,10 @@ The active implementation is TypeScript under `src/`. A local, Git-ignored snaps
 - `src/infrastructure/database/db.ts` — PostgreSQL schema creation, connection pool, and repeatable CSV upserts.
 - `src/infrastructure/llm/groq-client.ts` — strict structured extraction and reply drafting. It receives conversation context only, not payout records or payment tools. Deterministic filters check account identity, trip ID/date syntax, and unsafe replies.
 - `src/application/messages.ts` — idempotent inbound-message processing, conversation-state persistence, trace creation, and retry behavior.
-- `src/application/claims.ts` — rider/trip/payout lookups, seven-day IST eligibility, deterministic trip/day assessment, and outcome replies. It does not call PaySwift.
-- `src/application/traces.ts`, `src/application/ops.ts` — ordered trace and pending-operations queries.
+- `src/application/claims.ts` — rider/trip/payout lookups, seven-day IST eligibility, deterministic trip/day assessment, and outcome replies.
+- `src/application/payments.ts`, `src/infrastructure/payswift/client.ts` — reconcile PaySwift's ledger, send only eligible deterministic shortfalls with stable idempotency keys, and save provider request/results as PostgreSQL audit rows.
+- `src/application/traces.ts`, `src/application/ops.ts` — chronological trace, operations queue/conversation queries, and approve/reject actions.
+- `src/templates/ops.html` — local operations review page for rider conversations, traces, and pending items.
 - `src/app.ts`, `src/main.ts`, `src/api/openapi.ts` — Express routes, Swagger documentation, startup, reference import, and readiness.
 - `Dockerfile`, `docker-compose.yml`, `package.json`, `tsconfig.json`, `.env.example` — TypeScript container and local configuration. Keep the assignment-provided `payswift` service unchanged. Never commit `.env` or a real Groq key.
 
@@ -55,9 +57,8 @@ The user previously confirmed that `/health` worked and the earlier Python ackno
 ### Remaining work
 
 - Run the new rider/trip/payout investigation against representative trip-level, day-level, missing-data, and out-of-window messages; refine replies and multi-message context.
-- Enforce payment limits and create approval/escalation records.
-- Integrate PaySwift ledger reconciliation and idempotent payments.
-- Build the operations review page and approve/reject actions.
+- Rebuild and manually exercise PaySwift success, rejection, ambiguous-result, ledger-reconciliation, and daily-limit flows.
+- Rebuild and manually review the operations page and approve/reject sandbox behavior; this latest slice was TypeScript-compiled only.
 - Complete evals, CI, and submission evidence. The root README must remain at most one page; raw AI exports belong in `ai-logs/`.
 - No tests have been run. Do not describe changes as verified unless they have actually been exercised.
 
@@ -70,7 +71,7 @@ The user previously confirmed that `/health` worked and the earlier Python ackno
 - `src/infrastructure/reference-data/` — CSV parsing and validation.
 - `src/infrastructure/llm/` — Groq integration.
 - `src/infrastructure/payswift/` — future PaySwift client.
-- `src/templates/` — future operations UI.
+- `src/templates/` — operations UI.
 
 ## Conventions
 

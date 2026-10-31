@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QuickDrop · Operations desk</title>
+  <style>
+    :root { color-scheme: light; --ink:#17251f; --muted:#718078; --line:#e4ebe6; --paper:#f5f8f5; --green:#137a55; --green-soft:#e5f4ec; --amber:#9a5b0a; --amber-soft:#fff3db; --red:#a33c38; --red-soft:#fdebea; }
+    * { box-sizing:border-box } body { margin:0; background:var(--paper); color:var(--ink); font:14px/1.45 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif }
+    button,input,textarea { font:inherit } button { cursor:pointer } .top { display:flex; align-items:center; justify-content:space-between; padding:20px 28px; background:#fff; border-bottom:1px solid var(--line) }
+    .brand { display:flex; align-items:center; gap:12px }.mark { display:grid; place-items:center; width:38px;height:38px;border-radius:12px;background:var(--green);color:white;font-weight:800 }.brand strong{font-size:16px}.brand small{display:block;color:var(--muted);font-size:12px}
+    .header-actions { display:flex;align-items:center;gap:8px }.header-actions input { width:250px }.wrap { max-width:1440px;margin:22px auto;padding:0 20px }.metrics { display:flex;gap:12px;margin-bottom:16px }.metric { min-width:150px;padding:12px 16px;background:#fff;border:1px solid var(--line);border-radius:12px }.metric b{font-size:20px;display:block}.metric span{color:var(--muted);font-size:12px}
+    .layout { display:grid;grid-template-columns:minmax(320px, .92fr) minmax(500px,1.55fr);gap:16px;align-items:start }.left,.right{display:grid;gap:16px}.card { background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden }.card-head { display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line) }.card-head h2{font-size:14px;margin:0}.subtle{color:var(--muted);font-size:12px}.list{max-height:360px;overflow:auto}.item { padding:14px 18px;border-bottom:1px solid var(--line) }.item:last-child{border:0}.item.active{background:#f0f8f3;box-shadow:inset 3px 0 var(--green)}.item-top{display:flex;justify-content:space-between;gap:10px}.item button.open { border:0;background:transparent;color:inherit;text-align:left;padding:0;font-weight:650 }.reason,.preview{color:var(--muted);margin:7px 0 0;font-size:12px}.badge{display:inline-flex;align-items:center;border-radius:99px;padding:3px 8px;font-size:11px;font-weight:700;background:var(--amber-soft);color:var(--amber)}.badge.approved{background:#e9edf9;color:#465a9b}.badge.escalation{background:var(--red-soft);color:var(--red)}
+    .actions{display:flex;gap:8px;margin-top:12px}.btn{border:1px solid var(--line);border-radius:8px;padding:8px 12px;background:white;color:var(--ink);font-weight:650}.btn.primary{background:var(--green);border-color:var(--green);color:white}.btn.danger{color:var(--red);border-color:#efcbc8}.btn:disabled{opacity:.45;cursor:not-allowed}.field{border:1px solid var(--line);border-radius:8px;padding:9px 11px;background:white;color:var(--ink)}
+    .detail{padding:18px}.detail h3{margin:0 0 8px;font-size:17px}.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}.box{background:#f8faf8;border:1px solid var(--line);border-radius:10px;padding:12px}.box label{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}.box strong{font-size:16px}.thread{display:grid;gap:8px}.bubble{padding:10px 12px;border-radius:10px;background:#f3f6f4;white-space:pre-wrap}.bubble.agent{background:var(--green-soft);margin-left:18px}.pre{white-space:pre-wrap;overflow:auto;max-height:420px;background:#17221d;color:#dbf2e4;padding:14px;border-radius:10px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}.trace-step{border-left:2px solid #bfd8c9;padding:0 0 14px 12px;margin-left:5px}.trace-step:last-child{padding-bottom:0}.trace-step strong{font-size:12px}.trace-step time{float:right;color:var(--muted);font-size:11px}.trace-step pre{margin:6px 0 0}.empty,.status{padding:18px;color:var(--muted);font-size:13px}.status{margin-bottom:14px;border-radius:10px;background:#fff}.status.error{background:var(--red-soft);color:var(--red)}.status.ok{background:var(--green-soft);color:var(--green)}.hidden{display:none}
+    @media(max-width:900px){.layout{grid-template-columns:1fr}.header-actions input{width:190px}.metrics{overflow:auto}} @media(max-width:560px){.top{align-items:flex-start;gap:15px;flex-direction:column}.header-actions{width:100%}.header-actions input{flex:1;min-width:0}.wrap{padding:0 12px}.detail-grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><div class="mark">QD</div><div><strong>QuickDrop Operations</strong><small>Rider payout dispute desk</small></div></div>
+    <div class="header-actions"><input id="reviewer" class="field" placeholder="Reviewer name" aria-label="Reviewer name"><input id="apiKey" class="field" type="password" placeholder="Operations key" aria-label="Operations API key"><button class="btn" id="saveKey">Connect</button><button class="btn" id="refresh">Refresh</button></div>
+  </header>
+  <main class="wrap">
+    <div id="notice" class="status hidden" role="status"></div>
+    <section class="metrics"><div class="metric"><b id="pendingCount">—</b><span>Items awaiting review</span></div><div class="metric"><b id="conversationCount">—</b><span>Rider conversations</span></div><div class="metric"><b id="traceCount">—</b><span>Trace events selected</span></div></section>
+    <div class="layout">
+      <div class="left">
+        <section class="card"><div class="card-head"><h2>Operations queue</h2><span class="subtle">Approvals and escalations</span></div><div id="queue" class="list"><div class="empty">Loading review items…</div></div></section>
+        <section class="card"><div class="card-head"><h2>Conversations</h2><span class="subtle">Select a rider to inspect history</span></div><div id="conversations" class="list"><div class="empty">Loading conversations…</div></div></section>
+      </div>
+      <div class="right">
+        <section class="card"><div class="card-head"><h2 id="detailTitle">Review details</h2><span id="detailBadge" class="subtle">Choose a queue item or conversation</span></div><div id="details" class="detail"><div class="empty">Verified claim evidence and rider context will appear here.</div></div></section>
+        <section class="card"><div class="card-head"><h2>Chronological trace</h2><span id="traceRider" class="subtle">—</span></div><div id="trace" class="detail"><div class="empty">Select a rider to load trace events.</div></div></section>
+      </div>
+    </div>
+  </main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let queueItems = [], conversations = [], selectedId = null;
+  const apiKey = sessionStorage.getItem("qd-ops-key") || "";
+  $("apiKey").value = apiKey;
+  $("reviewer").value = sessionStorage.getItem("qd-reviewer") || "";
+  function notice(message, kind = "") { const el = $("notice"); el.textContent = message; el.className = `status ${kind}`; }
+  function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch])); }
+  function rupees(amount) { return amount == null ? "Not verified" : new Intl.NumberFormat("en-IN", {style:"currency",currency:"INR",maximumFractionDigits:0}).format(amount); }
+  function time(value) { return value ? new Date(value).toLocaleString("en-IN", {dateStyle:"medium",timeStyle:"short",timeZone:"Asia/Kolkata"}) : ""; }
+  function saveCredentials() { sessionStorage.setItem("qd-ops-key", $("apiKey").value.trim()); sessionStorage.setItem("qd-reviewer", $("reviewer").value.trim()); }
+  async function getJson(url) { const response = await fetch(url); const body = await response.json(); if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`); return body; }
+  function renderQueue() {
+    $("pendingCount").textContent = queueItems.filter(item => item.status === "pending").length;
+    $("queue").innerHTML = queueItems.length ? queueItems.map(item => {
+      const active = selectedId === item.id;
+      const claim = item.claim || {};
+      const verified = claim.verified_owed_rupees;
+      const actions = `<div class="actions">${item.type === "approval" ? `<button class="btn primary" data-approve="${escapeHtml(item.id)}">${item.status === "approved" ? "Check / safely retry" : `Approve ${rupees(item.amount)}`}</button>` : ""}${item.status === "pending" ? `<button class="btn danger" data-reject="${escapeHtml(item.id)}">Reject</button>` : ""}</div>`;
+      return `<article class="item ${active?"active":""}"><div class="item-top"><button class="open" data-open-item="${escapeHtml(item.id)}">${escapeHtml(item.rider_id)} · ${escapeHtml(item.type)}</button><span class="badge ${item.status === "approved"?"approved":item.type}">${escapeHtml(item.status)}</span></div><p class="reason">${escapeHtml(item.reason)}</p><p class="preview">${verified != null ? `Verified ${rupees(verified)}` : "No verified payable amount"} · ${escapeHtml(time(item.created_at))}</p>${actions}</article>`;
+    }).join("") : `<div class="empty">No items are waiting for review.</div>`;
+  }
+  function renderConversations() {
+    $("conversationCount").textContent = conversations.length;
+    $("conversations").innerHTML = conversations.length ? conversations.map(row => `<article class="item ${selectedId === `rider:${row.rider_id}`?"active":""}"><div class="item-top"><button class="open" data-rider="${escapeHtml(row.rider_id)}">Rider ${escapeHtml(row.rider_id)}</button><span class="subtle">${escapeHtml(time(row.received_at))}</span></div><p class="preview">${escapeHtml(row.text)}</p>${row.reply?`<p class="reason">Reply: ${escapeHtml(row.reply)}</p>`:""}</article>`).join("") : `<div class="empty">No rider conversations recorded yet.</div>`;
+  }
+  async function refresh() {
+    try { const [items, rows] = await Promise.all([getJson("/ops/pending"), getJson("/ops/conversations")]); queueItems = items; conversations = rows; renderQueue(); renderConversations(); notice("Review queue and conversations are up to date.", "ok"); }
+    catch (error) { notice(error.message, "error"); $("queue").innerHTML = `<div class="empty">Could not load the review queue.</div>`; }
+  }
+  function renderEvidence(item) {
+    const claim = item.claim || {};
+    const assessments = Array.isArray(claim.assessments) ? claim.assessments : [];
+    const assessmentHtml = assessments.map(a => `<div class="box"><label>${a.trip_id ? `Trip ${escapeHtml(a.trip_id)}` : `Day ${escapeHtml(a.payout_date || "")}`}</label><strong>${rupees(a.shortfall_rupees)} shortfall</strong><p class="reason">Policy ${rupees(a.expected_rupees)} · recorded ${rupees(a.historical_paid_rupees)}</p></div>`).join("");
+    $("detailTitle").textContent = `Rider ${item.rider_id} · ${item.type}`;
+    $("detailBadge").textContent = item.status;
+    $("details").innerHTML = `<h3>${escapeHtml(item.reason)}</h3><div class="detail-grid"><div class="box"><label>Verified amount</label><strong>${rupees(claim.verified_owed_rupees)}</strong></div><div class="box"><label>Requested approval</label><strong>${rupees(item.amount)}</strong></div></div>${assessments.length?`<div class="detail-grid">${assessmentHtml}</div>`:""}<div class="box"><label>Stored evidence · read only</label><pre class="pre">${escapeHtml(JSON.stringify(claim,null,2))}</pre></div>`;
+    loadTrace(item.rider_id);
+  }
+  async function loadTrace(riderId) {
+    $("traceRider").textContent = `Rider ${riderId}`; $("trace").innerHTML = `<div class="empty">Loading trace…</div>`;
+    try { const rows = await getJson(`/trace/${encodeURIComponent(riderId)}`); $("traceCount").textContent = rows.length; $("trace").innerHTML = rows.length ? rows.map(row => `<div class="trace-step"><time>${escapeHtml(time(row.at))}</time><strong>${escapeHtml(row.type)} · ${escapeHtml(row.name)}</strong><pre class="pre">${escapeHtml(JSON.stringify({input:row.input,output:row.output},null,2))}</pre></div>`).join("") : `<div class="empty">No trace events for this rider.</div>`; }
+    catch (error) { $("trace").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`; }
+  }
+  async function renderConversation(row) {
+    $("detailTitle").textContent = `Rider ${row.rider_id} conversation`;
+    $("detailBadge").textContent = `Loading conversation · ${time(row.received_at)}`;
+    $("details").innerHTML = `<div class="empty">Loading rider messages…</div>`;
+    loadTrace(row.rider_id);
+    try {
+      const detail = await getJson(`/ops/conversations/${encodeURIComponent(row.rider_id)}`);
+      $("detailBadge").textContent = `${detail.messages.length} messages · latest ${time(detail.received_at)}`;
+      $("details").innerHTML = `<div class="thread">${detail.messages.map(message => `<div class="bubble"><strong>Rider · ${escapeHtml(time(message.received_at))}</strong><br>${escapeHtml(message.text)}</div>${message.reply?`<div class="bubble agent"><strong>Agent reply</strong><br>${escapeHtml(message.reply)}</div>`:`<div class="bubble agent"><strong>Agent</strong><br>${escapeHtml(message.processing_status === "failed" ? "Message processing failed; see the trace for the error." : "No reply has been saved for this message.")}</div>`}`).join("")}</div><div class="box" style="margin-top:14px"><label>Conversation context · read only</label><pre class="pre">${escapeHtml(JSON.stringify(detail.state || {},null,2))}</pre></div>`;
+    } catch(error) { $("details").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`; }
+  }
+  async function action(itemId, kind) {
+    const item = queueItems.find(candidate => candidate.id === itemId);
+    if (!item) return;
+    if (!sessionStorage.getItem("qd-ops-key")) { notice("Enter the operations API key and connect before taking action.", "error"); return; }
+    const reviewer = $("reviewer").value.trim();
+    if (!reviewer) { notice("Enter the reviewer name before taking action.", "error"); return; }
+    let note = "";
+    if (kind === "approve") {
+      const amount = item.claim?.verified_owed_rupees;
+      if (!Number.isInteger(amount) || amount !== item.amount) { notice("The stored claim does not have a consistent verified amount; it cannot be approved.", "error"); return; }
+      if (!window.confirm(`Approve and send exactly ${rupees(amount)} to rider ${item.rider_id}? The amount comes from the stored verified claim.`)) return;
+    } else {
+      note = window.prompt("Reason for rejecting this claim?", "") ?? null;
+      if (note === null) return;
+      if (!window.confirm(`Reject this ${item.type} item for rider ${item.rider_id}? No payment will be sent.`)) return;
+    }
+    saveCredentials();
+    const button = document.querySelector(`[data-${kind}="${CSS.escape(itemId)}"]`); if(button) button.disabled = true;
+    try {
+      const response = await fetch(`/ops/${encodeURIComponent(itemId)}/${kind}`, {method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${sessionStorage.getItem("qd-ops-key")}`},body:JSON.stringify({reviewer,note})});
+      const body = await response.json(); if (!response.ok) throw new Error(body.detail || `Action failed (${response.status})`);
+      notice(body.detail || (kind === "approve" ? `Payment status: ${body.status}.` : "Claim rejected."), body.status === "resolved" || body.status === "rejected" ? "ok" : "error");
+      await refresh(); await loadTrace(item.rider_id);
+    } catch(error) { notice(error.message, "error"); if(button) button.disabled = false; }
+  }
+  $("saveKey").addEventListener("click", () => { saveCredentials(); notice("Operations credentials are stored for this browser tab.", "ok"); });
+  $("refresh").addEventListener("click", refresh);
+  $("queue").addEventListener("click", event => { const target=event.target; const approve=target.closest("[data-approve]"); const reject=target.closest("[data-reject]"); const open=target.closest("[data-open-item]"); if(approve) action(approve.dataset.approve,"approve"); else if(reject) action(reject.dataset.reject,"reject"); else if(open){selectedId=open.dataset.openItem;renderQueue();const item=queueItems.find(x=>x.id===selectedId);if(item)renderEvidence(item);} });
+  $("conversations").addEventListener("click", event => { const button=event.target.closest("[data-rider]"); if(!button)return; const row=conversations.find(x=>x.rider_id===button.dataset.rider); selectedId=`rider:${button.dataset.rider}`;renderQueue();renderConversations();if(row)renderConversation(row); });
+  refresh();
+</script>
+</body>
+</html>

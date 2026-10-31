@@ -6,6 +6,9 @@ import {
   InvestigationTarget,
   investigateIssues,
 } from "./claims.js";
+import { decideClaimPaths } from "./decisions.js";
+import { executeEligiblePayments, hasUnresolvedPaySwiftPayment, reconcilePaySwiftLedger } from "./payments.js";
+import { PaySwiftClient } from "../infrastructure/payswift/client.js";
 import {
   GroqMessageUnderstander,
   IssueUpdate,
@@ -31,6 +34,7 @@ export async function receiveMessage(
   pool: Pool,
   understander: GroqMessageUnderstander,
   args: { messageId: string; riderId: string; text: string; receivedAt: Date },
+  paySwift: PaySwiftClient = new PaySwiftClient(),
 ): Promise<string> {
   const client = await pool.connect();
   try {
@@ -81,6 +85,25 @@ export async function receiveMessage(
 
   try {
     const { state, recentMessages } = await loadContext(pool, args.riderId, args.messageId);
+    let ledgerAvailable = true;
+    let ledgerEvents: InvestigationEvent[] = [];
+    let reconciliationAttempted = false;
+    if (await hasUnresolvedPaySwiftPayment(pool, args.riderId)) {
+      reconciliationAttempted = true;
+      try {
+        const reconciliation = await reconcilePaySwiftLedger(pool, args.riderId, paySwift);
+        ledgerEvents = reconciliation.events;
+      } catch (error) {
+        ledgerAvailable = false;
+        ledgerEvents = [{
+          type: "error",
+          name: "payswift_ledger_reconciliation_failed",
+          input: { rider_id: args.riderId, reason: "unresolved_payment_follow_up" },
+          output: { error: error instanceof Error ? error.message : "unknown PaySwift ledger error", payment_blocked: true },
+        }];
+      }
+      if (ledgerEvents.some((event) => event.type === "error")) await persistEvents(pool, args.riderId, ledgerEvents);
+    }
     const modelResult = await understander.understand({
       riderId: args.riderId,
       text: args.text,
@@ -93,13 +116,43 @@ export async function receiveMessage(
       riderId: args.riderId,
       receivedAt: args.receivedAt,
     });
+    await addTraceToPool(pool, args.riderId, "model", "groq_message_understanding", {
+      message_id: args.messageId,
+      active_issue_ids: state.issues.map((issue) => issue.issue_id ?? null),
+    }, result);
     const applied = applyUpdates(state, result, args.messageId, args.receivedAt);
     const investigation = await investigateIssues(pool, args.riderId, args.receivedAt, applied.targets);
-    const updatedState = appendInvestigationContext(applied.state, investigation.outcomes);
-    const reply = investigation.outcomes.length > 0
-      ? investigation.outcomes.map((item) => item.reply).join(" ")
-      : result.reply;
-    await saveCompletedMessage(pool, args, result, reply, state, updatedState, investigation.events);
+    await persistEvents(pool, args.riderId, investigation.events);
+    const verifiedClaimsExist = investigation.outcomes.some((item) => item.status === "verified_shortfall");
+    if (verifiedClaimsExist && !reconciliationAttempted) {
+      reconciliationAttempted = true;
+      try {
+        const reconciliation = await reconcilePaySwiftLedger(pool, args.riderId, paySwift);
+        ledgerEvents.push(...reconciliation.events);
+      } catch (error) {
+        ledgerAvailable = false;
+        ledgerEvents = [{
+          type: "error",
+          name: "payswift_ledger_reconciliation_failed",
+          input: { rider_id: args.riderId },
+          output: { error: error instanceof Error ? error.message : "unknown PaySwift ledger error", payment_blocked: true },
+        }];
+      }
+      if (ledgerEvents.some((event) => event.type === "error")) await persistEvents(pool, args.riderId, ledgerEvents);
+    }
+    const decisions = await decideClaimPaths(pool, args.riderId, investigation.outcomes, {
+      messageId: args.messageId,
+      identityMismatch: result.identity_mismatch,
+      paymentProviderAvailable: ledgerAvailable,
+    });
+    await persistEvents(pool, args.riderId, decisions.events);
+    const payments = await executeEligiblePayments(pool, args.riderId, decisions.outcomes, paySwift);
+    await persistEvents(pool, args.riderId, payments.events);
+    const updatedState = appendInvestigationContext(applied.state, decisions.outcomes);
+    const reply = decisions.identityMismatchReply ?? (decisions.outcomes.length > 0
+      ? decisions.outcomes.map((item) => item.reply).join(" ")
+      : result.reply);
+    await saveCompletedMessage(pool, args, reply, updatedState);
     return reply;
   } catch (error) {
     await markFailed(pool, args.messageId, args.riderId,
@@ -203,11 +256,8 @@ function issueState(update: IssueUpdate, receivedAt: Date): Record<string, unkno
 async function saveCompletedMessage(
   pool: Pool,
   args: { messageId: string; riderId: string },
-  result: MessageUnderstanding,
   reply: string,
-  previousState: ConversationState,
   updatedState: ConversationState,
-  investigationEvents: InvestigationEvent[],
 ): Promise<void> {
   const client = await pool.connect();
   try {
@@ -221,13 +271,6 @@ async function saveCompletedMessage(
       `UPDATE inbound_messages SET reply = $2, processing_status = 'processed' WHERE message_id = $1`,
       [args.messageId, reply],
     );
-    await addTrace(client, args.riderId, "tool_call", "groq_message_understanding", {
-      message_id: args.messageId,
-      active_issue_ids: previousState.issues.map((issue) => issue.issue_id ?? null),
-    }, result);
-    for (const event of investigationEvents) {
-      await addTrace(client, args.riderId, event.type, event.name, event.input, event.output);
-    }
     await addTrace(client, args.riderId, "decision", "conversation_context_updated", {
       message_id: args.messageId,
     }, updatedState);
@@ -249,7 +292,8 @@ async function markFailed(pool: Pool, messageId: string, riderId: string, errorC
       `UPDATE inbound_messages SET processing_status = 'failed', reply = NULL WHERE message_id = $1`,
       [messageId],
     );
-    await addTrace(client, riderId, "error", "message_understanding_failed", { message_id: messageId }, { error: errorCode });
+    await addTrace(client, riderId, "error", errorCode === "language_understanding_unavailable" ? "model_extraction_failed" : "message_processing_failed",
+      { message_id: messageId }, { error: errorCode });
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -257,6 +301,20 @@ async function markFailed(pool: Pool, messageId: string, riderId: string, errorC
   } finally {
     client.release();
   }
+}
+
+async function persistEvents(pool: Pool, riderId: string, events: InvestigationEvent[]): Promise<void> {
+  for (const event of events) {
+    await addTraceToPool(pool, riderId, event.type, event.name, event.input, event.output);
+  }
+}
+
+async function addTraceToPool(pool: Pool, riderId: string, eventType: string, name: string, input: unknown, output: unknown): Promise<void> {
+  await pool.query(
+    `INSERT INTO trace_events (rider_id, event_type, name, input_data, output_data)
+     VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+    [riderId, eventType, name, input === null ? null : JSON.stringify(input), output === null ? null : JSON.stringify(output)],
+  );
 }
 
 async function addTrace(

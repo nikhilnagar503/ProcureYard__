@@ -1,6 +1,6 @@
 # Rider Payout Dispute Desk
 
-ProcureYard take-home project for QuickDrop. This service receives rider payout complaints, keeps conversation context, and will eventually investigate records and route or pay verified shortfalls.
+ProcureYard take-home project for QuickDrop. This service receives rider payout complaints, keeps conversation context, checks trip and payout records, and routes or pays verified shortfalls.
 
 ## Stack and run
 
@@ -9,20 +9,20 @@ ProcureYard take-home project for QuickDrop. This service receives rider payout 
 - Groq for language understanding and reply wording only
 - Docker Compose starts the app, database, and provided PaySwift sandbox
 
-On first setup, copy `.env.example` to `.env` and add your own `GROQ_API_KEY`. From the project folder, run:
+On first setup, copy `.env.example` to `.env`, then set `GROQ_API_KEY` and a private `OPS_API_KEY` (at least 16 characters). From the project folder, run:
 
 ```sh
 docker compose up --build
 ```
 
-Open Swagger at http://localhost:8000/docs. The app and PaySwift health routes are http://localhost:8000/health and http://localhost:8081/health.
+Open the operations page at http://localhost:8000/ops or Swagger at http://localhost:8000/docs. The app and PaySwift health routes are http://localhost:8000/health and http://localhost:8081/health.
 
 ## Current agent design
 
-`POST /messages` validates vendor messages, deduplicates retries by `message_id`, sends rider wording and safe issue context to Groq, and stores the extracted issue. Application code then looks up the rider, trips, and payout lines in PostgreSQL and deterministically assesses a trip or IST-day claim inside the seven-day window. Replies explain a verified shortfall, no shortfall, or why the available records are unclear. Groq does not receive payout evidence and does not calculate or authorize money. This slice does not call PaySwift or move funds.
+`POST /messages` validates and deduplicates vendor messages, uses Groq only to understand rider wording, and checks trip/payout data deterministically. Only a verified shortfall up to ₹200 can be paid automatically, once per rider per IST day. Before paying, the app reads PaySwift's ledger and reconciles it with PostgreSQL audit rows. It sends a stable `Idempotency-Key` and saves the request/provider response. Large, repeat, unclear, and suspicious cases wait for operations. Groq never sees payout evidence or authorizes money.
 
-`GET /trace/{rider_id}` returns ordered message, Groq, rider/trip/payout lookup, deterministic assessment, context-update, reply, and error events. `GET /ops/pending` lists operations items. The payout rules in `src/domain/payouts.ts` are used for this assessment; approval limits and payment handling remain future work.
+`GET /trace/{rider_id}` returns chronologically written receipt, extraction, lookup, policy, PaySwift, reply, and error events. `/ops` shows conversations, traces, and review items. Approve/reject actions require the local operations key. An approval reads and validates the stored verified amount; operators cannot change it. The same claim idempotency key is used if PaySwift must be safely retried. Confirmed rejection returns the item to the queue; uncertain status keeps it approved for ledger reconciliation.
 
 ## Remaining work
 
-Add runtime verification for deterministic trip/day claim assessments and multi-turn context, handle payment limits and operations approvals, reconcile and pay through PaySwift, build the operations page, add the evaluation runner and CI, and record evaluation results before submission. The basic Groq message-understanding path has been manually verified; this new database investigation slice has compiled but has not yet been exercised against the running app.
+PaySwift success, ambiguous-result reconciliation, idempotent message retry, and repeat-claim handling have been manually exercised against the local sandbox. This operations page and approval/rejection workflow compile but have not yet been exercised at runtime. Evaluation tooling, GitHub Actions, and submission evidence remain unfinished.

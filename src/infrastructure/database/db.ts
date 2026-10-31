@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS ops_items (
     CHECK (status IN ('pending', 'approved', 'rejected', 'resolved')),
   claim JSONB NOT NULL DEFAULT '{}'::jsonb,
   resolution_note TEXT,
+  claim_fingerprint VARCHAR(64),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   resolved_at TIMESTAMPTZ
 );
@@ -80,9 +81,34 @@ CREATE TABLE IF NOT EXISTS payment_records (
   payswift_payout_id VARCHAR(128) UNIQUE,
   status VARCHAR(24) NOT NULL,
   response JSONB,
+  claim_fingerprint VARCHAR(64),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ix_payment_records_rider_created ON payment_records(rider_id, created_at);
+ALTER TABLE ops_items ADD COLUMN IF NOT EXISTS claim_fingerprint VARCHAR(64);
+ALTER TABLE payment_records ADD COLUMN IF NOT EXISTS claim_fingerprint VARCHAR(64);
+CREATE INDEX IF NOT EXISTS ix_ops_items_claim_fingerprint ON ops_items(rider_id, claim_fingerprint);
+CREATE INDEX IF NOT EXISTS ix_payment_records_claim_fingerprint ON payment_records(rider_id, claim_fingerprint);
+CREATE TABLE IF NOT EXISTS claim_decisions (
+  rider_id VARCHAR(64) NOT NULL,
+  claim_fingerprint VARCHAR(64) NOT NULL,
+  occurrence_count INTEGER NOT NULL DEFAULT 1,
+  last_message_id VARCHAR(255),
+  latest_decision JSONB NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (rider_id, claim_fingerprint)
+);
+CREATE TABLE IF NOT EXISTS automatic_payment_slots (
+  rider_id VARCHAR(64) NOT NULL,
+  payout_date DATE NOT NULL,
+  claim_fingerprint VARCHAR(64) NOT NULL,
+  amount_rupees INTEGER NOT NULL CHECK (amount_rupees BETWEEN 1 AND 200),
+  status VARCHAR(16) NOT NULL DEFAULT 'reserved'
+    CHECK (status IN ('reserved', 'consumed', 'released')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (rider_id, payout_date)
+);
 `;
 
 export async function ensureSchema(): Promise<void> {

@@ -10,7 +10,7 @@ import {
 } from "../domain/payouts.js";
 import { IssueUpdate } from "../infrastructure/llm/groq-client.js";
 
-export type ClaimStatus = "needs_information" | "verified_shortfall" | "no_shortfall" | "unclear";
+export type ClaimStatus = "needs_information" | "verified_shortfall" | "no_shortfall" | "unclear" | "suspicious";
 
 export interface InvestigationTarget {
   issueId: string;
@@ -18,7 +18,7 @@ export interface InvestigationTarget {
 }
 
 export interface InvestigationEvent {
-  type: "tool_call" | "decision";
+  type: "tool_call" | "decision" | "error";
   name: string;
   input: unknown;
   output: unknown;
@@ -30,6 +30,12 @@ export interface ClaimOutcome {
   scope: "trip" | "day" | null;
   reason: string;
   assessments: PayoutAssessment[];
+  decision_path?: "needs_information" | "unclear_escalation" | "suspicious_escalation" | "large_claim_approval" | "repeat_claim_approval" | "repeat_already_paid_escalation" | "daily_limit_approval" | "payment_provider_unavailable" | "payment_guard_rejected" | "auto_payment_eligible" | "payment_succeeded" | "payment_result_uncertain" | "payment_failed_review" | "no_payment_due";
+  decision_reason?: string;
+  verified_owed_rupees?: number;
+  decision_amount_rupees?: number | null;
+  ops_item_id?: string | null;
+  claim_fingerprint?: string;
   reply: string;
 }
 
@@ -94,7 +100,10 @@ function resultReply(status: ClaimStatus, assessments: PayoutAssessment[], reaso
       : "Could you share the trip ID related to the payout issue?";
   }
   if (status === "unclear") {
-    return `I could not verify this claim from the available records: ${reason}. Please check the details and try again.`;
+    return `I could not verify this claim from the available records: ${reason}. I have sent it to the operations team for review.`;
+  }
+  if (status === "suspicious") {
+    return `The trip details do not match the rider account linked to this number. I have sent the case to the operations team to review.`;
   }
 
   const totalExpected = assessments.reduce((sum, item) => sum + item.expectedRupees, 0);
@@ -211,7 +220,8 @@ export async function investigateIssues(
         assessments.push(assessTrip(trip, lines));
       }
       if (unclearReason) {
-        outcomes.push(outcome(issueId, "unclear", "trip", unclearReason, assessments));
+        const suspicious = unclearReason.includes("not linked to this rider account");
+        outcomes.push(outcome(issueId, suspicious ? "suspicious" : "unclear", "trip", unclearReason, assessments));
         continue;
       }
       const totalShortfall = assessments.reduce((sum, assessment) => sum + assessment.shortfallRupees, 0);
